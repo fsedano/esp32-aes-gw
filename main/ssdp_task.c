@@ -4,7 +4,10 @@
   * @brief   SSDP over lwip BSD sockets.
   *
   *          Behaviour (wire doc §2 + arinc4i4o ssdp.c):
-  *            - join 239.255.255.250:1900, TTL 2
+  *            - join 239.255.255.250:1900, TTL 2, membership pinned to the
+  *              eth netif's address, refreshed every ~5 min (IGMP-snooping
+  *              switches age silent groups out) and re-joined on any
+  *              link/address change
   *            - NOTIFY ssdp:alive burst (x3) once the netif has an address,
   *              then one NOTIFY every ~30 s (hosts also use SSDP last-seen
   *              as a liveness signal)
@@ -37,6 +40,7 @@ static const char *TAG = "ssdp";
 #define SSDP_PORT           1900
 #define SSDP_HTTP_PORT      80
 #define SSDP_NOTIFY_MS      30000
+#define SSDP_REJOIN_MS      300000      /* refresh IGMP membership (~5 min) */
 #define SSDP_RX_BUF_SIZE    512
 #define SSDP_TX_BUF_SIZE    1400
 
@@ -52,7 +56,22 @@ static void fill_ident(ssdp_ident_t *id){
     id->http_port = SSDP_HTTP_PORT;
 }
 
-static int ssdp_open_socket(void){
+/* (Re-)join the SSDP group on the Ethernet netif's address. Pinning
+   imr_interface to the eth IP (instead of INADDR_ANY) keeps the membership
+   on the W5500 netif; refreshing it periodically survives IGMP-snooping
+   switches ageing the group out. Idempotent: drop (ignoring failure), then
+   add. */
+static void ssdp_group_rejoin(int sock, uint32_t ip4){
+    struct ip_mreq imr = {0};
+    imr.imr_multiaddr.s_addr = inet_addr(SSDP_GROUP);
+    imr.imr_interface.s_addr = ip4;
+    setsockopt(sock, IPPROTO_IP, IP_DROP_MEMBERSHIP, &imr, sizeof(imr));
+    if(setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &imr, sizeof(imr)) < 0){
+        ESP_LOGW(TAG, "IP_ADD_MEMBERSHIP failed");
+    }
+}
+
+static int ssdp_open_socket(uint32_t ip4){
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if(sock < 0){
         return -1;
@@ -69,12 +88,11 @@ static int ssdp_open_socket(void){
         return -1;
     }
 
-    struct ip_mreq imr = {0};
-    imr.imr_multiaddr.s_addr = inet_addr(SSDP_GROUP);
-    imr.imr_interface.s_addr = htonl(INADDR_ANY);
-    if(setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &imr, sizeof(imr)) < 0){
-        ESP_LOGW(TAG, "IP_ADD_MEMBERSHIP failed");
-    }
+    ssdp_group_rejoin(sock, ip4);
+
+    /* Pin outgoing NOTIFYs to the same netif. */
+    struct in_addr mif = { .s_addr = ip4 };
+    setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, &mif, sizeof(mif));
 
     uint8_t ttl = 2;
     setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
@@ -106,7 +124,8 @@ static void ssdp_task(void *arg){
             vTaskDelay(pdMS_TO_TICKS(200));
         }
 
-        int sock = ssdp_open_socket();
+        uint32_t bound_ip = net_eth_get_ip4();
+        int sock = ssdp_open_socket(bound_ip);
         if(sock < 0){
             ESP_LOGE(TAG, "socket failed, retrying");
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -122,8 +141,12 @@ static void ssdp_task(void *arg){
                  BOARD_INFO_SHORT_ID, BOARD_INFO_FW_TAG, identity_uuid());
 
         TickType_t last_notify = xTaskGetTickCount();
+        TickType_t last_join   = xTaskGetTickCount();
 
-        while(net_eth_ready()){
+        /* Serve until the link drops OR the address changes (a DHCP
+           re-address invalidates the pinned membership and every
+           advertised LOCATION). */
+        while(net_eth_ready() && net_eth_get_ip4() == bound_ip){
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(sock, &rfds);
@@ -150,9 +173,16 @@ static void ssdp_task(void *arg){
                 ssdp_send_notify(sock, txbuf);
                 last_notify = xTaskGetTickCount();
             }
+
+            /* Periodic IGMP membership refresh (snooping switches age
+               silent groups out). */
+            if((xTaskGetTickCount() - last_join) >= pdMS_TO_TICKS(SSDP_REJOIN_MS)){
+                ssdp_group_rejoin(sock, bound_ip);
+                last_join = xTaskGetTickCount();
+            }
         }
 
-        close(sock);        /* address lost: rebind once DHCP is back */
+        close(sock);        /* address lost/changed: rebind + re-join */
     }
 }
 
@@ -216,6 +246,6 @@ static void http_desc_task(void *arg){
 }
 
 void ssdp_start(void){
-    xTaskCreate(ssdp_task, "ssdp", 4096, NULL, 4, NULL);
+    xTaskCreate(ssdp_task, "ssdp", 6144, NULL, 4, NULL);
     xTaskCreate(http_desc_task, "http_desc", 4096, NULL, 3, NULL);
 }

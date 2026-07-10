@@ -19,6 +19,7 @@
 #include "lc_log.h"
 #include "lc_port.h"
 
+#include <assert.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -58,6 +59,14 @@ static inline uint8_t ring_get(void){
 /* Drop the oldest whole record and count the lost line. */
 static void ring_drop_oldest(void){
     uint16_t rec = (uint16_t)(LOG_REC_OVERHEAD + g_ring[g_tail]);
+    assert(rec <= g_used);      /* a bigger rec means the ring is corrupt */
+    if(rec > g_used){
+        /* Release builds: don't wrap g_used into a huge value — dump the
+           whole ring instead and keep running. */
+        g_head = g_tail = g_used = 0;
+        g_dropped++;
+        return;
+    }
     g_tail = (uint16_t)((g_tail + rec) % LOG_RING_SIZE);
     g_used = (uint16_t)(g_used - rec);
     g_dropped++;

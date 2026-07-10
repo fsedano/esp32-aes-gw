@@ -96,6 +96,8 @@ esp_err_t net_eth_start(const uint8_t mac[6], const char *hostname){
         .address_bits   = 8,    /* W5500 control phase   */
         .mode           = 0,
         .clock_speed_hz = W5500_SPI_CLOCK_MHZ * 1000 * 1000,
+        .input_delay_ns = 80,   /* MISO round-trip; needed >= 20 MHz (IDF
+                                   W5500 examples) */
         .spics_io_num   = W5500_GPIO_CS,
         .queue_size     = 20,
     };
