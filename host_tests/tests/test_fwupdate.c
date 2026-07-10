@@ -19,6 +19,8 @@ void host_port_set_tick(uint32_t ms);
 static uint8_t  fake_flash[FAKE_PART_SIZE];
 static uint32_t fake_flash_len;
 static int      fake_begin_calls, fake_end_calls, fake_boot_calls;
+static int      fake_open;          /* begin..end/abort window, like esp_ota */
+static int      fake_abort_calls;   /* aborts of an OPEN handle only        */
 static uint8_t  fake_iv[16];
 static int      fake_write_fail;    /* fail the Nth write when > 0 */
 
@@ -29,6 +31,7 @@ static int f_begin(uint32_t size){
     memset(fake_flash, 0xEE, sizeof(fake_flash));
     fake_flash_len = 0;
     fake_begin_calls++;
+    fake_open = 1;
     return 0;
 }
 static int f_write(const uint8_t *d, uint32_t n){
@@ -39,19 +42,29 @@ static int f_write(const uint8_t *d, uint32_t n){
     fake_flash_len += n;
     return 0;
 }
-static int f_end(void){ fake_end_calls++; return 0; }
+static int f_end(void){ fake_end_calls++; fake_open = 0; return 0; }
+/* Idempotent like the esp_ota port: only an open handle counts as aborted. */
+static void f_abort(void){
+    if(fake_open){
+        fake_open = 0;
+        fake_abort_calls++;
+    }
+}
 static int f_boot(void){ fake_boot_calls++; return 0; }
 static int f_aes_start(const uint8_t iv[16]){ memcpy(fake_iv, iv, 16); return 0; }
 static int f_aes_decrypt(uint8_t *d, uint32_t n){ (void)d; (void)n; return 0; }
 
 static const fwup_ops_t FAKE_OPS = {
     .flash_begin = f_begin, .flash_write = f_write, .flash_end = f_end,
+    .flash_abort = f_abort,
     .set_boot = f_boot, .aes_start = f_aes_start, .aes_decrypt = f_aes_decrypt,
 };
 
 static void fake_reset(void){
     fake_flash_len = 0;
     fake_begin_calls = fake_end_calls = fake_boot_calls = 0;
+    fake_open = 0;
+    fake_abort_calls = 0;
     fake_write_fail = 0;
 }
 
@@ -185,6 +198,25 @@ int main(void){
     CHECK_EQ_U32(send_start(sizeof(img), IMG_CSUM, want_iv), FWUP_OK);
     CHECK_EQ_U32(send_step(1, img, 32), FWUP_OK);
     CHECK_EQ_U32(send_step(2, img + 32, 32), FWUP_ERR_FLASH_PROGRAM);
+
+    /* --- mid-upload session drop releases the open flash handle ------------------ */
+    fake_reset();
+    fwup_init(&FAKE_OPS);
+    CHECK_EQ_U32(send_start(sizeof(img), IMG_CSUM, want_iv), FWUP_OK);
+    CHECK_EQ_U32(send_step(1, img, 32), FWUP_OK);
+    fwup_session_reset();                       /* client disconnected */
+    CHECK_EQ_U32(fake_abort_calls, 1);          /* esp_ota_abort equivalent ran */
+    CHECK_EQ_U32(upload_all(img, sizeof(img), IMG_CSUM), FWUP_OK);
+    CHECK_EQ_U32(fake_abort_calls, 1);          /* clean finish: no extra abort */
+
+    /* --- checksum-fail-then-disconnect also releases the handle ------------------ */
+    fake_reset();
+    fwup_init(&FAKE_OPS);
+    CHECK_EQ_U32(upload_all(img, sizeof(img), IMG_CSUM ^ 1), FWUP_ERR_FW_CHECKSUM);
+    CHECK_EQ_U32(fake_open, 1);                 /* flash_end never ran */
+    fwup_session_reset();
+    CHECK_EQ_U32(fake_abort_calls, 1);
+    CHECK_EQ_U32(fake_open, 0);
 
     /* --- watchdog: 2 s of silence aborts the upload ------------------------------ */
     fake_reset();

@@ -54,6 +54,13 @@ void fwup_init(const fwup_ops_t *ops){
 }
 
 void fwup_session_reset(void){
+    /* Release the port's flash handle no matter how the last upload ended:
+       a checksum-fail or a mid-upload disconnect leaves it open (the core
+       only tracks its own flash_open flag), and the port hook is
+       idempotent. */
+    if(g_fwops != NULL && g_fwops->flash_abort != NULL){
+        g_fwops->flash_abort();
+    }
     fwup_reset_var();
     g_fw.firm_size = 0;
 }

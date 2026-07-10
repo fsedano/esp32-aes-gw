@@ -705,6 +705,9 @@ void comm_core_session(bool connected){
         LOG_INF("comm: TCP control connected");
     }else{
         channels_reset();       /* dropped session -> all disabled */
+#ifdef RECOVERY_BUILD
+        fwup_session_reset();   /* abort a half-done upload right away */
+#endif
         lc_log_set_level(LOG_LEVEL_INFO);  /* threshold resets with it */
         LOG_INF("comm: TCP control disconnected");
     }

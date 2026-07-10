@@ -24,6 +24,7 @@
 #include "find_me.h"
 #include "fwup_port.h"
 #include "identity.h"
+#include "ota_ops.h"
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
@@ -62,6 +63,12 @@ void app_main(void){
 #ifdef RECOVERY_BUILD
     fwup_port_init();
 #endif
+
+    /* A freshly OTA'd image marks itself valid after ~10 s of uptime (it has
+       proven it does not crash-loop). Deliberately not gated on the network:
+       a power cycle on a networkless bench must not roll a good app back to
+       recovery. No-op in the recovery build. */
+    ota_rollback_timer_start();
 
     ssdp_start();
     comm_start();

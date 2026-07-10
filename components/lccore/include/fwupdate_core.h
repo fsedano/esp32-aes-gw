@@ -69,6 +69,10 @@ typedef struct {
     int (*flash_write)(const uint8_t *data, uint32_t len);
     /* Finalize + validate the written image. Returns 0 on success. */
     int (*flash_end)(void);
+    /* Abort a half-done upload: release any open flash/OTA handle without
+       finalizing. Optional (may be NULL); must be idempotent — it is called
+       on every session reset, whether or not an upload was in flight. */
+    void (*flash_abort)(void);
     /* Point the boot selector at the new application. Returns 0 on success. */
     int (*set_boot)(void);
     /* Start an AES-128-CBC decrypt session with the image IV. 0 on success. */
@@ -80,8 +84,10 @@ typedef struct {
 /* One-time init (recovery main). */
 void fwup_init(const fwup_ops_t *ops);
 
-/* Fresh TCP control session: abort any half-done upload (mirrors
-   boot_comm.c's flash_loader_init-on-connect). */
+/* TCP control session edge (connect or disconnect): abort any half-done
+   upload — including releasing the port's flash handle via flash_abort —
+   and clear the latched error (mirrors boot_comm.c's
+   flash_loader_init-on-connect). */
 void fwup_session_reset(void);
 
 /* Feed one CMD_FW_UPDATE payload; returns the wire ACK status. The payload
