@@ -42,3 +42,8 @@ foreach(t framing ack_info discrete fletcher32 identity ssdp log_ring fwupdate)
     target_link_libraries(test_${t} PRIVATE lccore)
     add_test(NAME ${t} COMMAND test_${t})
 endforeach()
+
+# VERSION_STRING format contract (pure cmake, no compilation needed).
+add_test(NAME version_format
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_version_format.cmake
+)
