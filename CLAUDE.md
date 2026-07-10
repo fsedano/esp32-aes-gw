@@ -54,7 +54,7 @@ Requirement: identical UX to the STM32 card — the gateway's upgrade dialog wor
 - `JUMP_TO_BOOTLOADER(uid)` in the app → `esp_ota_set_boot_partition(factory)` + restart. The gateway polls GET_FW_INFO for up to 30 s (`waitForMode`) expecting fw_type=1.
 - `FW_UPDATE` in recovery: START carries the 24-byte image header `[firm_size u32 | fletcher32 u32 | aes_iv 16]`; STEPs carry 32-byte AES-128-CBC ciphertext chunks; decrypt and `esp_ota_write` plaintext to `ota_0`. FINISH → verify Fletcher32 (little-endian 16-bit words, both sums mod 0xFFFF, over the 0xFF-padded plaintext — see `aes-gw2/fwupdate/pack.go`) before ACKing, then set boot partition to `ota_0` only on success.
 - `REBOOT(uid)` → restart; gateway polls until fw_type=0 and reads the new version.
-- Recoverability: `factory` is never rewritten by OTA, and a failed/aborted flash leaves boot pointing at factory — the card comes back in bootloader mode, re-flashable from the dialog, exactly like the STM32 card. Additionally enable `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`: the app self-marks valid only once it's serving GET_FW_INFO, so a crash-looping new image auto-reverts without user action. ROM USB download mode remains the bench-level last resort.
+- Recoverability: `factory` is never rewritten by OTA, and a failed/aborted flash leaves boot pointing at factory — the card comes back in bootloader mode, re-flashable from the dialog, exactly like the STM32 card. Additionally `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is on: the app self-marks valid via a one-shot timer ~10 s after boot (deliberately network-independent — gating on DHCP would roll back a good image on a networkless bench), so a crash-looping new image auto-reverts without user action. In the recovery build, a bare `REBOOT` without a prior upload sets the boot partition back to `ota_0` when it holds a valid image (STM32 parity), staying on factory otherwise. ROM USB download mode remains the bench-level last resort.
 
 Rejected alternative: "bootloader as a mode of the main app" (single image, flag in NVS) — a broken app can't reach updater mode, violating the recoverable-from-bootloader requirement.
 
@@ -67,6 +67,30 @@ Constraints discovered in the gateway code:
 
 ## Build Commands
 
-None yet. Once the ESP-IDF project is scaffolded, record here: `idf.py set-target esp32s3`, build/flash/monitor commands, and how to run host-side protocol tests (the arinc4i4o pattern of compiling `comm.c`/`ssdp.c` against fake headers on the host — see its `firmware/docs/TESTING.md` — is worth replicating).
+```sh
+source ~/esp/esp-idf/export.sh
+
+# Main application (runs from ota_0)
+idf.py build
+
+# Recovery / bootloader personality (factory partition)
+idf.py -B build-recovery -DSDKCONFIG=sdkconfig.recovery \
+       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.recovery" \
+       -DRECOVERY_BUILD=1 build
+
+# Host protocol tests (no ESP-IDF needed)
+cmake -S host_tests -B host_tests/build && cmake --build host_tests/build
+ctest --test-dir host_tests/build --output-on-failure
+
+# Initial flash over USB (later updates go over the wire via the gateway dialog)
+idf.py -B build-recovery -p /dev/cu.usbmodem* flash          # bootloader+table+recovery
+python -m esptool --chip esp32s3 -p /dev/cu.usbmodem* write_flash 0x120000 build/esp32-aes-gw.bin
+python $IDF_PATH/components/app_update/otatool.py -p /dev/cu.usbmodem* switch_ota_partition --name ota_0
+
+# Pack a release image for fsedano/sim-lc-esp32-aes-gw
+python tools/fwpack.py build/esp32-aes-gw.bin esp32-aes-gw-v<X.Y.Z>.blob
+```
+
+Version strings come from git describe (`cmake/gen_version.cmake`): exact clean tag → `v0.1.0`; anything else → next-patch dev pre-release (`v0.1.1-dev.<n>.g<sha>[.dirty]`), which the gateway's `fwrelease` semver orders above the released floor — verified against `fwrelease.Compare`.
 
 Useful for integration testing: the arinc4i4o virtual linecard (`cmake -S firmware/sim -B firmware/build-sim && cmake --build firmware/build-sim`) and the gateway's `fakelc` show what a correct implementation looks like on the wire. Note macOS gotcha: AirPlay squats on port 5000.
