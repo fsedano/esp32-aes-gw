@@ -4,9 +4,16 @@
   * @brief   aes-gw2 wire-protocol control plane (see comm_core.h).
   *
   *          Ported from arinc4i4o firmware src/comm/comm.c. Handler logic,
-  *          validation order, ACK payloads and log lines are kept identical
-  *          so this card is byte-indistinguishable from the STM32 sibling
-  *          (and from aes-gw2's fakelc simulator) on the wire.
+  *          validation order, ACK payloads and log lines follow the STM32
+  *          sibling (and aes-gw2's fakelc simulator) on the wire, with two
+  *          deliberate divergences, both unreachable via aes-gw2:
+  *            - ADD_LABEL / TT_UPD_LBL / TT_BUILD on a channel that was
+  *              never CHNL_SETUP return CHNL_NOT_INIT on all 4 channels,
+  *              where the STM32 only routes ch0 through its TX engine and
+  *              blind-ACKs OK on ch1-3.
+  *            - ARINC config/query commands are TCP-only here (dropped
+  *              without an ACK on UDP, like DISCRETE_SETUP); the gateway
+  *              only ever configures over TCP.
   *
   *          Build personalities:
   *            - application (default): full ARINC + discrete command set;
@@ -109,12 +116,19 @@ bool comm_core_send_udp(uint8_t cmd, const uint8_t *payload, uint8_t len){
     return g_ops->send_udp(pkt, total);
 }
 
+/* ACK envelope byte counts: [req_id | status(LE32)] + largest extra, the
+   53-byte GET_FW_INFO / GET_HW_INFO block (comm_core_pack_*_info). */
+#define COMM_ACK_ENVELOPE_LEN   5u
+#define COMM_INFO_BLOCK_LEN     53u
+_Static_assert(COMM_ACK_ENVELOPE_LEN + COMM_INFO_BLOCK_LEN <= PROTO_MAX_PAYLOAD,
+               "ACK envelope + info block must fit one frame payload");
+
 /* Standard ACK envelope: [req_id | status(LE32) | extra]. */
 static void comm_send_ack(uint8_t cmd, uint8_t req_id, uint32_t status,
                           const uint8_t *extra, uint8_t extra_len){
-    uint8_t payload[5 + 53];        /* 5-byte envelope + largest extra (FW/HW info) */
-    if(extra_len > (uint8_t)(sizeof(payload) - 5)){
-        extra_len = (uint8_t)(sizeof(payload) - 5);
+    uint8_t payload[COMM_ACK_ENVELOPE_LEN + COMM_INFO_BLOCK_LEN];
+    if(extra_len > (uint8_t)(sizeof(payload) - COMM_ACK_ENVELOPE_LEN)){
+        extra_len = (uint8_t)(sizeof(payload) - COMM_ACK_ENVELOPE_LEN);
     }
     payload[0] = req_id;
     payload[1] = (uint8_t)(status);
@@ -140,7 +154,7 @@ static void str_field(uint8_t *dst, const char *src, uint8_t n){
 
 /* GET_FW_INFO ACK extra (53 bytes, proto.go PackFwInfo / UnpackFwInfo). */
 void comm_core_pack_fw_info(uint8_t out[53]){
-    memset(out, 0, 53);
+    memset(out, 0, COMM_INFO_BLOCK_LEN);
     /* bytes 0..5: build date Y,M,D,H,M,S (no RTC -> fixed, like the STM32) */
     out[0] = 26; out[1] = 7; out[2] = 1;
     str_field(out + 6,  VERSION_COMMIT, 8);         /* hash    */
@@ -150,14 +164,14 @@ void comm_core_pack_fw_info(uint8_t out[53]){
 }
 
 static void handle_get_fw_info(uint8_t req_id){
-    uint8_t fw[53];
+    uint8_t fw[COMM_INFO_BLOCK_LEN];
     comm_core_pack_fw_info(fw);
     comm_send_ack(CMD_GET_FW_INFO, req_id, PROTO_ST_OK, fw, sizeof(fw));
 }
 
 /* GET_HW_INFO ACK extra (53 bytes, proto.go PackHwInfo). */
 void comm_core_pack_hw_info(uint8_t out[53]){
-    memset(out, 0, 53);
+    memset(out, 0, COMM_INFO_BLOCK_LEN);
     out[0] = 1; out[1] = 0; out[2] = 0;        /* hw major.minor.fix */
     out[3] = 1; out[4] = 7; out[5] = 26;       /* day, month, year   */
     str_field(out + 6, BOARD_INFO_SHORT_ID, 16);
@@ -167,7 +181,7 @@ void comm_core_pack_hw_info(uint8_t out[53]){
 }
 
 static void handle_get_hw_info(uint8_t req_id){
-    uint8_t hw[53];
+    uint8_t hw[COMM_INFO_BLOCK_LEN];
     comm_core_pack_hw_info(hw);
     comm_send_ack(CMD_GET_HW_INFO, req_id, PROTO_ST_OK, hw, sizeof(hw));
 }
@@ -577,6 +591,28 @@ static void handle_discrete_set(uint8_t req_id, const uint8_t *payload,
 /* ====================================================================== */
 static void comm_dispatch(uint8_t cmd, uint8_t req_id,
                           uint8_t *payload, uint8_t len, uint8_t src){
+    /* Config and query commands are TCP-only: a copy arriving over the
+       fire-and-forget UDP path is dropped without an ACK or state change,
+       mirroring handle_discrete_setup (and because their TCP ACKs must
+       never be triggered from UDP). Only SEND_LBL_MAN and DISCRETE_SET are
+       dual-transport (wire doc §4.12/§9.3); the gateway configures over
+       TCP exclusively. */
+    if(src != COMM_SRC_TCP){
+        switch(cmd){
+            case CMD_GET_FW_INFO:
+            case CMD_GET_HW_INFO:
+            case CMD_GET_UID:
+            case CMD_ARINC_CHNL_SETUP:
+            case CMD_ARINC_CHNL_ENABLE:
+            case CMD_ARINC_ADD_LABEL:
+            case CMD_ARINC_TT_UPD_LBL:
+            case CMD_ARINC_TT_BUILD:
+                return;
+            default:
+                break;
+        }
+    }
+
     switch(cmd){
         case CMD_GET_FW_INFO:       handle_get_fw_info(req_id); break;
         case CMD_GET_HW_INFO:       handle_get_hw_info(req_id); break;

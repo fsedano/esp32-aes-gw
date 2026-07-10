@@ -16,6 +16,13 @@
 
 #define DISCRETE_DEFAULT_REPORT_MS  500u
 
+/* The gateway registers this product with Extra{Inputs:1, Outputs:32}
+   (aes-gw2/linecard/protocol/discrete/products.go, mirroring A429-8BD): one
+   digital input must be present and valid so a bound din.0 behaves like a
+   real (idle) input instead of a permanently-invalid one. The stub keeps it
+   at constant 0 (log-only, no pins). */
+#define DISCRETE_NUM_INPUTS         1u
+
 typedef struct {
     bool     enabled;
     uint16_t report_ms;
@@ -31,8 +38,8 @@ static discrete_t g_disc;
 static void emit_state(void){
     proto_discrete_state_t st;
     st.relay_state = g_disc.relay_state;
-    st.input_state = 0;                 /* no inputs wired on this card   */
-    st.input_valid = 0;
+    st.input_state = 0;                 /* one input, constant idle [stub] */
+    st.input_valid = (1u << DISCRETE_NUM_INPUTS) - 1u;  /* present + valid */
     st.link        = 1;                 /* virtual relay block: always up */
     st.seq         = g_disc.seq;
     if(comm_core_send_udp(CMD_DISCRETE_STATE, (const uint8_t *)&st, sizeof(st))){

@@ -209,6 +209,38 @@ int main(void){
     CHECK(pl != NULL && rcmd == CMD_ARINC_TT_GET_LIST
           && ack_status(pl) == PROTO_ST_ERROR);
 
+    /* --- config/query commands over UDP are dropped: no ACK, no state ------- */
+    /* CHNL_SETUP for an untouched channel arriving via UDP is ignored... */
+    proto_chnl_setup_t udp_su = { .chnl = 3, .direction = DIR_TX,
+                                  .speed = SPEED_100KHZ, .mode = MODE_TX_MANUAL,
+                                  .config_delay_us = 0 };
+    pl = req(COMM_SRC_UDP, 0x50, CMD_ARINC_CHNL_SETUP,
+             (const uint8_t *)&udp_su, sizeof(udp_su), &rcmd, &rlen);
+    CHECK(pl == NULL);                          /* no ACK injected into TCP */
+    CHECK_EQ_U32(cap_udp.frames, 0);            /* nothing on UDP either    */
+    /* ...and left no state behind: enabling ch3 still says NOT_INIT, and a
+       manual send on it is still rejected. */
+    proto_chnl_enable_t udp_en = { .chnl = 3, .direction = DIR_TX, .is_enable = 1 };
+    pl = req(COMM_SRC_UDP, 0x51, CMD_ARINC_CHNL_ENABLE,
+             (const uint8_t *)&udp_en, sizeof(udp_en), &rcmd, &rlen);
+    CHECK(pl == NULL);                          /* enable over UDP: dropped */
+    pl = req(COMM_SRC_TCP, 0x52, CMD_ARINC_CHNL_ENABLE,
+             (const uint8_t *)&udp_en, sizeof(udp_en), &rcmd, &rlen);
+    CHECK(pl != NULL && ack_status(pl) == PROTO_ST_ARINC_TX_ERR_CHNL_NOT_INIT);
+    /* The other config/query opcodes are UDP-dropped the same way. */
+    pl = req(COMM_SRC_UDP, 0x53, CMD_ARINC_ADD_LABEL, add, sizeof(add), &rcmd, &rlen);
+    CHECK(pl == NULL);
+    pl = req(COMM_SRC_UDP, 0x54, CMD_ARINC_TT_UPD_LBL, upd, sizeof(upd), &rcmd, &rlen);
+    CHECK(pl == NULL);
+    pl = req(COMM_SRC_UDP, 0x55, CMD_ARINC_TT_BUILD, bld, sizeof(bld), &rcmd, &rlen);
+    CHECK(pl == NULL);
+    pl = req(COMM_SRC_UDP, 0x56, CMD_GET_FW_INFO, NULL, 0, &rcmd, &rlen);
+    CHECK(pl == NULL);
+    pl = req(COMM_SRC_UDP, 0x57, CMD_GET_HW_INFO, NULL, 0, &rcmd, &rlen);
+    CHECK(pl == NULL);
+    pl = req(COMM_SRC_UDP, 0x58, CMD_GET_UID, NULL, 0, &rcmd, &rlen);
+    CHECK(pl == NULL);
+
     /* --- session drop resets every channel (§5 / CLAUDE.md) ----------------- */
     comm_core_session(false);
     CHECK(!comm_core_any_channel_enabled());

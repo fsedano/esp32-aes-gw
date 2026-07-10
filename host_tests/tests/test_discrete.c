@@ -74,8 +74,10 @@ int main(void){
     const proto_discrete_state_t *st = next_state();
     CHECK(st != NULL);
     CHECK_EQ_U32(st->relay_state, 0);
-    CHECK_EQ_U32(st->input_state, 0);
-    CHECK_EQ_U32(st->input_valid, 0);           /* nothing wired */
+    CHECK_EQ_U32(st->input_state, 0);           /* one input, constant idle */
+    CHECK_EQ_U32(st->input_valid, 1);           /* input 0 present + valid
+                                                   (gateway registers
+                                                   Extra{Inputs:1}) */
     CHECK_EQ_U32(st->link, 1);
     uint8_t seq0 = st->seq;
 
