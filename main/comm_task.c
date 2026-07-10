@@ -7,14 +7,19 @@
   *          - TCP :5000, single client; a second connection is closed
   *            immediately. Connect/disconnect drive comm_core_session()
   *            (all channels reset on either edge; log threshold resets to
-  *            INFO on disconnect).
-  *          - UDP :10737: the host endpoint is latched from the first
-  *            datagram and re-seated by any PING arriving from a new
-  *            addr:port (wire doc §10.4); dev->host traffic (LOG_MSG,
-  *            DISCRETE_STATE, future RX labels) goes there.
+  *            INFO on disconnect). The accepted socket gets a bounded send
+  *            timeout and short TCP keepalives so a half-open peer can
+  *            never wedge the single client slot.
+  *          - UDP :10737: the host endpoint is latched (and re-seated) only
+  *            by a fully validated PING frame (framing + checksum, wire doc
+  *            §10.4; the gateway PINGs at startup); dev->host traffic
+  *            (LOG_MSG, DISCRETE_STATE, future RX labels) goes there.
   *          - periodic services: DEVICE_STATUS at ~1 Hz on TCP (app build),
   *            log-ring flush, discrete heartbeat, FW_UPDATE watchdog
   *            (recovery build).
+  *          - link loss / DHCP re-address: all sockets are torn down, the
+  *            session and host endpoint reset, and everything rebinds when
+  *            the network returns.
   ******************************************************************************
   */
 
@@ -51,6 +56,10 @@ static const char *TAG = "comm";
 #define COMM_UDP_BUF_SIZE   512
 #define COMM_SELECT_MS      20
 #define COMM_STATUS_MS      1000        /* DEVICE_STATUS cadence  */
+#define COMM_SND_TIMEOUT_S  3           /* blocking send() bound  */
+#define COMM_KEEPIDLE_S     5           /* keepalive after idle   */
+#define COMM_KEEPINTVL_S    2           /* probe interval         */
+#define COMM_KEEPCNT        3           /* probes before drop     */
 
 static int      s_tcp_listen = -1;
 static int      s_tcp_client = -1;
@@ -60,8 +69,9 @@ static uint8_t  s_rxbuf[COMM_RX_BUF_SIZE];
 static uint16_t s_rxlen;
 static uint8_t  s_udpbuf[COMM_UDP_BUF_SIZE];
 
-/* Host UDP endpoint, latched from the first datagram and re-seated by any
-   UDP PING arriving from a new addr:port. */
+/* Host UDP endpoint, latched and re-seated only by a fully validated PING
+   frame (framing + checksum), so a stray datagram can never steal the
+   dev->host stream. */
 static struct sockaddr_in s_host_addr;
 static bool               s_host_known;
 
@@ -187,6 +197,22 @@ static void tcp_accept_service(void){
     }
     int yes = 1;
     setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    /* Bound blocking sends: a stalled peer makes send() fail after
+       COMM_SND_TIMEOUT_S and the client is dropped instead of wedging the
+       comm task (and, in the recovery build, the single client slot). */
+    struct timeval snd_to = { .tv_sec = COMM_SND_TIMEOUT_S, .tv_usec = 0 };
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+    /* Short keepalives: a half-open client (peer power-cycled, cable pulled)
+       is detected and reaped even when we have nothing to send — the
+       recovery build sends nothing unsolicited, so without this a dead
+       client would hold the slot forever. */
+    setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes));
+    int ka_idle  = COMM_KEEPIDLE_S;
+    int ka_intvl = COMM_KEEPINTVL_S;
+    int ka_cnt   = COMM_KEEPCNT;
+    setsockopt(c, IPPROTO_TCP, TCP_KEEPIDLE,  &ka_idle,  sizeof(ka_idle));
+    setsockopt(c, IPPROTO_TCP, TCP_KEEPINTVL, &ka_intvl, sizeof(ka_intvl));
+    setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT,   &ka_cnt,   sizeof(ka_cnt));
     s_tcp_client = c;
     s_rxlen = 0;
     comm_core_session(true);        /* fresh control session */
@@ -208,6 +234,12 @@ static void tcp_client_service(void){
     s_rxlen = (uint16_t)(s_rxlen + (uint16_t)n);
 
     uint16_t off = comm_core_input(s_rxbuf, s_rxlen, COMM_SRC_TCP);
+    if(s_tcp_client < 0){
+        /* A handler's TCP send failed inside comm_core_input and
+           tcp_client_drop() already reset s_rxlen: compacting now would
+           compute s_rxlen - off with a stale s_rxlen and wrap. */
+        return;
+    }
     if(off > 0){
         uint16_t rem = (uint16_t)(s_rxlen - off);
         if(rem){
@@ -215,6 +247,28 @@ static void tcp_client_service(void){
         }
         s_rxlen = rem;
     }
+}
+
+/* True when the datagram starts with a whole, checksum-valid PING frame.
+   Only such a frame may latch or re-seat the host UDP endpoint. */
+static bool udp_is_valid_ping(const uint8_t *buf, uint16_t len){
+    if(len < (uint16_t)(PROTO_HEADER_SIZE + PROTO_CSUM_SIZE)){
+        return false;
+    }
+    if(buf[0] != (uint8_t)(PROTO_HEAD & 0xFF) ||            /* BB */
+       buf[1] != (uint8_t)((PROTO_HEAD >> 8) & 0xFF) ||     /* AA */
+       buf[4] != CMD_PING){
+        return false;
+    }
+    uint8_t size = buf[3];
+    if(len < (uint16_t)(PROTO_HEADER_SIZE + size + PROTO_CSUM_SIZE)){
+        return false;
+    }
+    uint8_t csum = 0;
+    for(uint16_t i = PROTO_CSUM_START; i < (uint16_t)(PROTO_HEADER_SIZE + size); i++){
+        csum += buf[i];
+    }
+    return csum == buf[PROTO_HEADER_SIZE + size];
 }
 
 static void udp_service(void){
@@ -226,16 +280,15 @@ static void udp_service(void){
         return;
     }
 
-    /* Latch / re-seat the host endpoint (wire doc §4.4 + §10.4): any first
-       datagram latches; only a PING re-seats an already-latched endpoint. */
-    bool is_ping = (n >= PROTO_HEADER_SIZE)
-                && s_udpbuf[0] == (uint8_t)(PROTO_HEAD & 0xFF)          /* BB */
-                && s_udpbuf[1] == (uint8_t)((PROTO_HEAD >> 8) & 0xFF)   /* AA */
-                && s_udpbuf[4] == CMD_PING;
+    /* Latch / re-seat the host endpoint (wire doc §4.4 + §10.4): only a
+       fully validated PING may latch or re-seat, so garbage or spoofed
+       datagrams cannot capture the dev->host stream. The gateway sends
+       PINGs at startup, so a well-behaved host latches immediately. */
+    bool is_ping = udp_is_valid_ping(s_udpbuf, (uint16_t)n);
     bool same_peer = s_host_known
                   && s_host_addr.sin_port == peer.sin_port
                   && s_host_addr.sin_addr.s_addr == peer.sin_addr.s_addr;
-    if(!s_host_known || (is_ping && !same_peer)){
+    if(is_ping && (!s_host_known || !same_peer)){
         s_host_addr = peer;
         s_host_known = true;
         LOG_INF("comm: UDP host %s:%d",
@@ -301,71 +354,86 @@ static void status_service(void){
 /* Task                                                                   */
 /* ====================================================================== */
 
+/* Tear down every socket and forget the host endpoint; the outer loop
+   rebinds once the network is back. Dropping the client also resets the
+   protocol session (channels/discrete/upload state). */
+static void comm_sockets_close(void){
+    tcp_client_drop();
+    if(s_tcp_listen >= 0){
+        close(s_tcp_listen);
+        s_tcp_listen = -1;
+    }
+    if(s_udp >= 0){
+        close(s_udp);
+        s_udp = -1;
+    }
+    s_host_known = false;
+}
+
 static void comm_task(void *arg){
     (void)arg;
 
-    while(!net_eth_ready()){
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
-
-    while(s_tcp_listen < 0){
-        s_tcp_listen = tcp_listen_open();
-        if(s_tcp_listen < 0){
-            ESP_LOGE(TAG, "tcp listen failed, retrying");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-    }
-    while(s_udp < 0){
-        s_udp = udp_open();
-        if(s_udp < 0){
-            ESP_LOGE(TAG, "udp bind failed, retrying");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-    }
-
-    ESP_LOGI(TAG, "control :%d / stream :%d up", COMM_PORT_TCP, COMM_PORT_UDP);
-    LOG_INF("comm: control plane up");
-
-    /* The control plane is serving: a freshly OTA'd image proved itself —
-       cancel any pending rollback (app build; no-op otherwise). */
-    ota_mark_valid();
-
     for(;;){
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(s_tcp_listen, &rfds);
-        FD_SET(s_udp, &rfds);
-        int maxfd = (s_tcp_listen > s_udp) ? s_tcp_listen : s_udp;
-        if(s_tcp_client >= 0){
-            FD_SET(s_tcp_client, &rfds);
-            if(s_tcp_client > maxfd){
-                maxfd = s_tcp_client;
-            }
+        while(!net_eth_ready()){
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        uint32_t bound_ip = net_eth_get_ip4();
+
+        s_tcp_listen = tcp_listen_open();
+        s_udp        = udp_open();
+        if(s_tcp_listen < 0 || s_udp < 0){
+            ESP_LOGE(TAG, "socket bind failed, retrying");
+            comm_sockets_close();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
         }
 
-        struct timeval tv = { .tv_sec = 0, .tv_usec = COMM_SELECT_MS * 1000 };
-        int r = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        ESP_LOGI(TAG, "control :%d / stream :%d up", COMM_PORT_TCP, COMM_PORT_UDP);
+        LOG_INF("comm: control plane up");
 
-        if(r > 0){
-            if(FD_ISSET(s_tcp_listen, &rfds)){
-                tcp_accept_service();
+        while(net_eth_ready() && net_eth_get_ip4() == bound_ip){
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(s_tcp_listen, &rfds);
+            FD_SET(s_udp, &rfds);
+            int maxfd = (s_tcp_listen > s_udp) ? s_tcp_listen : s_udp;
+            if(s_tcp_client >= 0){
+                FD_SET(s_tcp_client, &rfds);
+                if(s_tcp_client > maxfd){
+                    maxfd = s_tcp_client;
+                }
             }
-            if(s_tcp_client >= 0 && FD_ISSET(s_tcp_client, &rfds)){
-                tcp_client_service();
-            }
-            if(FD_ISSET(s_udp, &rfds)){
-                udp_service();
-            }
-        }
 
-        /* Periodic services. */
-        log_flush_service();
+            struct timeval tv = { .tv_sec = 0, .tv_usec = COMM_SELECT_MS * 1000 };
+            int r = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+
+            if(r > 0){
+                if(FD_ISSET(s_tcp_listen, &rfds)){
+                    tcp_accept_service();
+                }
+                if(s_tcp_client >= 0 && FD_ISSET(s_tcp_client, &rfds)){
+                    tcp_client_service();
+                }
+                if(FD_ISSET(s_udp, &rfds)){
+                    udp_service();
+                }
+            }
+
+            /* Periodic services. */
+            log_flush_service();
 #ifndef RECOVERY_BUILD
-        discrete_glue_loop();
-        status_service();
+            discrete_glue_loop();
+            status_service();
 #else
-        fwup_tick();
+            fwup_tick();
 #endif
+        }
+
+        /* Link lost or the DHCP address changed: tear everything down and
+           rebind (stale sockets and a stale host endpoint would silently
+           blackhole traffic otherwise). */
+        ESP_LOGW(TAG, "network lost/readdressed, rebinding");
+        comm_sockets_close();
     }
 }
 

@@ -21,6 +21,10 @@ esp_err_t net_eth_start(const uint8_t mac[6], const char *hostname);
 /* True once DHCP has bound an address. */
 bool net_eth_ready(void);
 
+/* Current IPv4 address in network byte order, 0 while unbound. Lets the
+   socket tasks detect address changes and pin multicast membership. */
+uint32_t net_eth_get_ip4(void);
+
 /* Current IPv4 as a dotted-quad string ("0.0.0.0" while unbound). */
 void net_eth_get_ip_str(char *buf, size_t cap);
 

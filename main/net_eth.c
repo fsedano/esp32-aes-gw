@@ -139,6 +139,14 @@ bool net_eth_ready(void){
     return s_got_ip;
 }
 
+uint32_t net_eth_get_ip4(void){
+    esp_netif_ip_info_t info;
+    if(s_netif != NULL && esp_netif_get_ip_info(s_netif, &info) == ESP_OK){
+        return info.ip.addr;        /* already network byte order */
+    }
+    return 0;
+}
+
 void net_eth_get_ip_str(char *buf, size_t cap){
     esp_netif_ip_info_t info;
     if(s_netif != NULL && esp_netif_get_ip_info(s_netif, &info) == ESP_OK){
