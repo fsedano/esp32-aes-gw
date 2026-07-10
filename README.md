@@ -23,9 +23,15 @@ main/                ESP-IDF app: W5500 + esp_netif/DHCP, SSDP + UPnP
                      description.xml tasks, TCP/UDP transport, OTA plumbing,
                      recovery-build esp_ota+mbedtls FW_UPDATE port.
 host_tests/          plain cmake+ctest unit tests (no ESP-IDF needed).
+tools/fwpack.py      pack an app .bin into the aes-gw2 OTA image container.
 partitions.csv       8 MB: nvs | otadata | phy | factory (recovery, 1 MB)
                      | ota_0 (main app, ~6.9 MB).
-cmake/gen_version.cmake  VERSION_STRING/VERSION_COMMIT from git describe.
+cmake/gen_version.cmake  VERSION_STRING/VERSION_COMMIT from git state:
+                     bare tag on a clean tagged HEAD (release), else
+                     v<next-patch>-dev.<count>.g<sha>[.dirty] so the
+                     gateway's fwrelease ordering places dev builds ABOVE
+                     the tag they grew from and BELOW the next release
+                     (format pinned by host_tests' version_format case).
 ```
 
 ## Build (ESP-IDF v5.5)
@@ -63,11 +69,27 @@ idf.py -p <PORT> monitor
 
 After that, updates go over the wire: the gateway's upgrade dialog drives
 `JUMP_TO_BOOTLOADER` → `FW_UPDATE` (START/STEP/FINISH, AES-128-CBC,
-Fletcher32-verified) → `REBOOT`. A failed/aborted flash leaves the boot
-selector on the factory recovery app, so the card always comes back in
-bootloader mode. `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is on: a freshly
-flashed app marks itself valid only once its control server is up, so a
-crash-looping image auto-reverts to recovery.
+Fletcher32-verified) → `REBOOT`.
+
+`REBOOT` in recovery mode mirrors the STM32 bootloader: it first tries to
+point the boot selector back at ota_0 — so a bare `JUMP_TO_BOOTLOADER` →
+`REBOOT` round-trips back into the application — unless an upload already
+set the boot partition this session. `esp_ota_set_boot_partition()`
+validates the ota_0 image first, so with an invalid/empty ota_0 the
+selector stays on the factory recovery app (fail-safe preserved); a
+failed/aborted flash likewise leaves the card coming back in bootloader
+mode. `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is on: a freshly flashed app
+marks itself valid ~10 s after boot (once it has proven it does not
+crash-loop — deliberately not network-gated, so a power cycle on a
+networkless bench cannot roll a good app back), and a crash-looping image
+auto-reverts to recovery.
+
+Release binaries are packed with `tools/fwpack.py`
+(`[size|fletcher32|iv|ciphertext]`, same container as
+`aes-gw2/fwupdate/pack.go`) and published as release assets on
+**`fsedano/sim-lc-esp32-aes-gw`** (the product's `FwRepo`). Note
+`aes-gw2/fwrelease` caps downloaded release assets at 1 MiB — keep the
+packed app image under that (or raise the cap) when wiring up managed OTA.
 
 The AES-128 image key is the **shared test key**
 (`components/lccore/include/aes_key.h`, copied from
@@ -98,12 +120,12 @@ its identity from the MCU's 96-bit UID:
 
 ## Gateway registration
 
-The gateway ignores unknown board_ids: `A429-ESP_4D` must be registered in
-`aes-gw2/linecard/protocol/arinc/products.go` (`RegisterProduct`, new
-product ID, `BoardIDs: []string{"A429-ESP_4D"}`) before it appears in
-discovery. See `aes-gw2/docs/ADDING_LINECARDS.md`. Note
-`aes-gw2/fwrelease/github.go` caps release assets at 1 MiB — an ESP32-S3
-app image will likely need that raised when OTA management is wired up.
+The gateway ignores unknown board_ids: `A429-ESP_4D` is registered in
+`aes-gw2/linecard/protocol/discrete/products.go` (`RegisterProduct`,
+product `A429_ESP_4D`, `BoardIDs: []string{"A429-ESP_4D"}`, capabilities
+mirroring A429-8BD: ARINC 4 in / 4 out plus a discrete
+`Extra{Inputs:1, Outputs:32}` group, `FwRepo: fsedano/sim-lc-esp32-aes-gw`,
+`MinFwVersion: v0.1.0`). See `aes-gw2/docs/ADDING_LINECARDS.md`.
 
 ## Not implemented yet (stubs / deferred)
 
@@ -112,6 +134,5 @@ app image will likely need that raised when OTA management is wired up.
   driven.
 - Timetable bulk reads (0x15/0x17): ERROR ACK, same as the STM32 firmware.
 - DEVICE_STATUS counters are all-zero (matches the gateway's fakelc).
-- fwpack step to wrap the ota_0 `.bin` as a `[size|fletcher32|iv|ciphertext]`
-  release asset (use `arinc4i4o/tools/fwpack` or `aes-gw2/fwupdate/pack.go`
-  with the shared test key meanwhile).
+- Discrete inputs: one input is reported present and valid but its state is
+  a constant 0 (no pin is read yet).
