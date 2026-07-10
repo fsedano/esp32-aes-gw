@@ -1,0 +1,7 @@
+# Recovery ("BL-A429-ESP_4D") build overrides, applied on top of
+# sdkconfig.defaults. The personality switch itself is the RECOVERY_BUILD
+# compile definition (see the top-level CMakeLists.txt); no Kconfig
+# differences are required today. Keep the recovery app lean: quieter
+# default log level saves a little flash and boot time.
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

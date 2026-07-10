@@ -24,6 +24,9 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
+/* One-time init of the port layer (locks). Call before lc_log_init(). */
+void lc_port_init(void);
+
 /* Milliseconds since boot (wraps at 2^32, like HAL_GetTick). */
 uint32_t lc_port_tick_ms(void);
 
