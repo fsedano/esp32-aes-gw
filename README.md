@@ -71,6 +71,14 @@ After that, updates go over the wire: the gateway's upgrade dialog drives
 `JUMP_TO_BOOTLOADER` → `FW_UPDATE` (START/STEP/FINISH, AES-128-CBC,
 Fletcher32-verified) → `REBOOT`.
 
+The recovery build negotiates the STEP chunk size: a successful `FW_UPDATE`
+START is ACKed with 2 extra bytes (u16 LE = `FWUP_CHUNK_SIZE`, 240)
+advertising the max ciphertext bytes per STEP, cutting the lockstep round
+trips ~7.5× vs. the STM32 bootloader's fixed 32. Legacy hosts that ignore
+the extra (and keep sending 32-byte STEPs) still work — any multiple of 16
+up to 240 is accepted — and STM32 cards, whose START ACK carries no extra,
+keep getting 32-byte STEPs from an updated gateway.
+
 `REBOOT` in recovery mode mirrors the STM32 bootloader: it first tries to
 point the boot selector back at ota_0 — so a bare `JUMP_TO_BOOTLOADER` →
 `REBOOT` round-trips back into the application — unless an upload already

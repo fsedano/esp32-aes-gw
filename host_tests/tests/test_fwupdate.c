@@ -85,7 +85,8 @@ static uint32_t send_start(uint32_t size, uint32_t csum, const uint8_t iv[16]){
 }
 
 static uint32_t send_step(uint32_t index, const uint8_t *data, uint8_t n){
-    uint8_t pl[4 + FWUP_CHUNK_SIZE];
+    /* Sized above 4 + FWUP_CHUNK_SIZE so tests can send an oversized STEP. */
+    uint8_t pl[4 + 246];
     wr_u32(pl, index);
     memcpy(pl + 4, data, n);
     return fwup_handle(pl, (uint8_t)(4 + n));
@@ -98,8 +99,11 @@ static uint32_t send_finish(uint32_t size){
     return fwup_handle(pl, sizeof(pl));
 }
 
-/* Full happy-path upload of `img[0..len)`. */
-static uint32_t upload_all(const uint8_t *img, uint32_t len, uint32_t csum){
+/* Full happy-path upload of `img[0..len)` in `chunk`-byte STEPs. Legacy
+   hosts use 32 (updater.go's default); negotiating hosts use the advertised
+   FWUP_CHUNK_SIZE (240). */
+static uint32_t upload_chunked(const uint8_t *img, uint32_t len,
+                               uint32_t csum, uint32_t chunk){
     static const uint8_t iv[16] = { 1, 2, 3, 4, 5, 6, 7, 8,
                                     9, 10, 11, 12, 13, 14, 15, 16 };
     uint32_t st = send_start(len, csum, iv);
@@ -107,10 +111,10 @@ static uint32_t upload_all(const uint8_t *img, uint32_t len, uint32_t csum){
         return st;
     }
     uint32_t index = 1;
-    for(uint32_t off = 0; off < len; off += FWUP_CHUNK_SIZE){
+    for(uint32_t off = 0; off < len; off += chunk){
         uint32_t n = len - off;
-        if(n > FWUP_CHUNK_SIZE){
-            n = FWUP_CHUNK_SIZE;
+        if(n > chunk){
+            n = chunk;
         }
         st = send_step(index++, img + off, (uint8_t)n);
         if(st != FWUP_OK){
@@ -118,6 +122,12 @@ static uint32_t upload_all(const uint8_t *img, uint32_t len, uint32_t csum){
         }
     }
     return send_finish(len);
+}
+
+/* Legacy-host upload: 32-byte STEPs, as updater.go sends without (or
+   before) negotiation. */
+static uint32_t upload_all(const uint8_t *img, uint32_t len, uint32_t csum){
+    return upload_chunked(img, len, csum, 32);
 }
 
 int main(void){
@@ -148,6 +158,44 @@ int main(void){
 
     /* A second upload on the same session works (gateway retry). */
     CHECK_EQ_U32(upload_all(img, sizeof(img), IMG_CSUM), FWUP_OK);
+
+    /* --- negotiated 240-byte STEPs ------------------------------------------ */
+    /* Full upload at the advertised FWUP_CHUNK_SIZE: 4x240 + an 80-byte
+       tail (mixed sizes within one upload are legal: any %16 length up to
+       the cap). */
+    fake_reset();
+    fwup_init(&FAKE_OPS);
+    CHECK_EQ_U32(FWUP_CHUNK_SIZE, 240);         /* wire contract with updater.go */
+    CHECK_EQ_U32(upload_chunked(img, sizeof(img), IMG_CSUM, 240), FWUP_OK);
+    CHECK_EQ_U32(fake_boot_calls, 1);
+    CHECK_EQ_U32(fake_flash_len, sizeof(img));
+    CHECK_MEM(fake_flash, img, sizeof(img));
+
+    /* 240-byte STEPs with an exact 16-byte tail: 5*240 + 16 = 1216. */
+    {
+        static uint8_t img2[1216];
+        for(size_t i = 0; i < sizeof(img2); i++){
+            img2[i] = (uint8_t)((i * 13 + 5) & 0xFF);
+        }
+        uint32_t csum2 = fletcher32(img2, sizeof(img2));
+        fake_reset();
+        fwup_init(&FAKE_OPS);
+        CHECK_EQ_U32(upload_chunked(img2, sizeof(img2), csum2, 240), FWUP_OK);
+        CHECK_EQ_U32(fake_flash_len, sizeof(img2));
+        CHECK_MEM(fake_flash, img2, sizeof(img2));
+    }
+
+    /* An oversized STEP (> FWUP_CHUNK_SIZE; the length gate runs before
+       the %16 one, and 4+244 is the most a 250-byte lockstep payload with
+       a bigger-than-advertised chunk could carry anyway) is rejected. */
+    fake_reset();
+    fwup_init(&FAKE_OPS);
+    {
+        static const uint8_t big[244] = { 0 };
+        static const uint8_t iv[16]   = { 0 };
+        CHECK_EQ_U32(send_start(sizeof(img), IMG_CSUM, iv), FWUP_OK);
+        CHECK_EQ_U32(send_step(1, big, sizeof(big)), FWUP_ERR_PAYLOAD_TOO_LONG);
+    }
 
     /* --- STEP before START ------------------------------------------------- */
     fake_reset();

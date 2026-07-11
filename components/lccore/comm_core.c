@@ -646,8 +646,26 @@ static void comm_dispatch(uint8_t cmd, uint8_t req_id,
 #else /* RECOVERY_BUILD */
         case CMD_FW_UPDATE:
             if(src == COMM_SRC_TCP){
+                /* Chunk-size negotiation: a successful START (index 0) is
+                   ACKed with 2 extra bytes (u16 LE = FWUP_CHUNK_SIZE)
+                   advertising the max STEP chunk. The STM32 bootloader
+                   sends no extra here, so hosts that don't understand the
+                   advertisement — or talk to legacy cards — keep the
+                   32-byte default. All other FW_UPDATE ACKs are unchanged. */
+                int is_start = (len >= 4 &&
+                                payload[0] == 0 && payload[1] == 0 &&
+                                payload[2] == 0 && payload[3] == 0);
                 uint32_t status = fwup_handle(payload, len);
-                comm_send_ack(CMD_FW_UPDATE, req_id, status, NULL, 0);
+                if(is_start && status == FWUP_OK){
+                    uint8_t max_chunk[2] = {
+                        (uint8_t)(FWUP_CHUNK_SIZE & 0xFF),
+                        (uint8_t)((FWUP_CHUNK_SIZE >> 8) & 0xFF),
+                    };
+                    comm_send_ack(CMD_FW_UPDATE, req_id, status,
+                                  max_chunk, sizeof(max_chunk));
+                }else{
+                    comm_send_ack(CMD_FW_UPDATE, req_id, status, NULL, 0);
+                }
             }
             break;
 #endif
