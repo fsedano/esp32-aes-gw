@@ -1,0 +1,10 @@
+# ESP32-S3-ETH, 8 MB flash.
+# factory = recovery app (SSDP "BL-A429-ESP_4D", fw_type=1, serves FW_UPDATE).
+#           Never rewritten by OTA -> the card is always recoverable.
+# ota_0   = main application. Written by the recovery app via FW_UPDATE.
+# Name,     Type, SubType,  Offset,   Size
+nvs,        data, nvs,      0x9000,   0x6000
+otadata,    data, ota,      0xf000,   0x2000
+phy_init,   data, phy,      0x11000,  0x1000
+factory,    app,  factory,  0x20000,  0x100000
+ota_0,      app,  ota_0,    0x120000, 0x6E0000
