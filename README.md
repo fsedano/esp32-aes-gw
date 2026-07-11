@@ -105,6 +105,65 @@ The AES-128 image key is the **shared test key**
 `aes-gw2/fwupdate/pack.go` / the arinc4i4o `fwpack` flow work unchanged.
 Replace it for production.
 
+## Release (encrypted OTA image)
+
+The gateway flashes cards over the wire from a packed, encrypted image
+published as a GitHub release asset on the product's `FwRepo`
+(**`fsedano/sim-lc-esp32-aes-gw`**). `tools/fwpack.py` produces that image:
+it 0xFF-pads the app binary to a 16-byte boundary, computes the Fletcher32
+over the padded plaintext, AES-128-CBC encrypts it with a random IV under
+the key in `components/lccore/include/aes_key.h`, and emits the container
+`[ firm_size u32 LE | fletcher32 u32 LE | aes_iv 16 | ciphertext ]` — the
+same format `aes-gw2/fwupdate/pack.go` reads.
+
+Prerequisite (one-time): `pip install cryptography`.
+
+```sh
+# 1. Tag the release commit. Use an exact, clean tag: gen_version.cmake then
+#    stamps a bare "vX.Y.Z" — a dev/dirty suffix (v0.1.1-dev.N.g<sha>) is
+#    ordered BELOW the release by the gateway's MinFwVersion gate and parks
+#    the card. Verify `git describe` shows exactly the tag before building.
+git tag v0.1.2
+git describe --tags        # must print "v0.1.2", not "v0.1.2-1-g…"
+
+# 2. Build the application image (this is what runs from ota_0 and is what
+#    gets shipped — NOT the recovery build).
+source ~/esp/esp-idf/export.sh
+idf.py build
+strings build/esp32-aes-gw.bin | grep -m1 '^v0\.'   # sanity: version string
+
+# 3. Pack the encrypted OTA image.
+python tools/fwpack.py build/esp32-aes-gw.bin esp32-fw-Release-v0.1.2.bin
+
+# 4. (optional) Verify the container locally before publishing: header size
+#    must equal the ciphertext length, and it must round-trip through the
+#    gateway's parser (aes-gw2/fwupdate.LoadImage) if you have that checkout.
+python - <<'PY'
+import struct
+b = open('esp32-fw-Release-v0.1.2.bin','rb').read()
+size, f32 = struct.unpack('<II', b[:8])
+assert size == len(b) - 24 and size % 16 == 0, "bad container"
+print(f'ok: {len(b)} bytes, ciphertext {size}, fletcher32 0x{f32:08x}')
+PY
+
+# 5. Publish the release. The asset MUST end in .bin (or .blob) — the
+#    gateway's release checker (aes-gw2/fwrelease) ignores anything else.
+gh release create v0.1.2 -R fsedano/sim-lc-esp32-aes-gw \
+   --target main --title v0.1.2 \
+   --notes "A429-ESP_4D firmware v0.1.2" \
+   esp32-fw-Release-v0.1.2.bin
+```
+
+The gateway picks it up on its next release poll (or force one from the UI /
+`POST /api/firmware/refresh`); the card then shows `fw_status:
+upgrade_available` and the upgrade dialog drives the flash. Keep the packed
+image under **1 MiB** — `aes-gw2/fwrelease` refuses larger assets (or raise
+`maxAssetSize` there).
+
+> Uses the shared **test** AES key. For production, replace the key in
+> `components/lccore/include/aes_key.h` (and in whatever packs releases) and
+> keep it out of the source tree.
+
 ## Host tests (no ESP-IDF)
 
 ```sh
