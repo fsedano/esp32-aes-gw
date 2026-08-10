@@ -37,9 +37,9 @@ Core commands the card must answer: `GET_FW_INFO 0x06` (the gateway considers a 
 
 ## Card Identity (the part that MUST differ from arinc4i4o)
 
-This card's board_id is **`A429-ESP_4DH`** (the equivalent of `BOARD_INFO_SHORT_ID` in the STM32 firmware, where all identity constants live in `board_info.h`/`board_info.c`; here in `lccore/include/board_id.h`). The bootloader-mode variant is `BL-A429-ESP_4DH`. Do not reuse the tokens already registered in the gateway: `A429-8`, `A429-8B`, `A429-8BD`, `ARI-10`, `SSD-10`, `SSD3-10`, and the pre-HID `A429-ESP_4D` (which this firmware's ancestors advertised — cards on that product migrate here via OTA, both products share `FwRepo`).
+This card's board_id is **`AES-ESP-DO32-HID`** (the equivalent of `BOARD_INFO_SHORT_ID` in the STM32 firmware, where all identity constants live in `board_info.h`/`board_info.c`; here in `lccore/include/board_id.h`). The bootloader-mode variant is `BL-AES-ESP-DO32-HID`. Do not reuse the tokens already registered in the gateway: `A429-8`, `A429-8B`, `A429-8BD`, `ARI-10`, `SSD-10`, `SSD3-10`, and the pre-HID `A429-ESP_4D` (which this firmware's ancestors advertised — cards on that product migrate here via OTA, both products share `FwRepo`).
 
-The gateway registers `A429-ESP_4DH` as product `A429_ESP_4DH` in `/Users/fsedano/code/aes-gw2/linecard/protocol/hid/products.go`: ARINC 4/4 primary + `Extra` discrete `{Inputs:1, Outputs:32}` + `Extra` HID `{Inputs:8, Outputs:32}` (HID convention: Inputs = axis count, Outputs = button count). `RegisterProduct` panics on duplicate IDs, so collisions surface at gateway startup.
+The gateway registers `AES-ESP-DO32-HID` as product `AES_ESP_DO32_HID` in `/Users/fsedano/code/aes-gw2/linecard/protocol/hid/products.go`: ARINC 4/4 primary + `Extra` discrete `{Inputs:1, Outputs:32}` + `Extra` HID `{Inputs:8, Outputs:32}` (HID convention: Inputs = axis count, Outputs = button count). `RegisterProduct` panics on duplicate IDs, so collisions surface at gateway startup.
 
 Identity requirements on the wire: a stable 24-char UUID consistent across all SSDP messages (USN header), and a stable 12-byte UID reported in GET_UID/GET_HW_INFO. The STM32 derives MAC/serial/hostname/UUID from its 96-bit hardware UID; on ESP32-S3 derive equivalents from eFuse MAC.
 
@@ -51,7 +51,7 @@ The arinc4i4o firmware has a clean seam the port should keep: `comm.c` never tou
 
 Requirement: identical UX to the STM32 card — the gateway's upgrade dialog works unchanged, and the card is always recoverable from bootloader mode. The dialog is driven entirely by `aes-gw2/fwupdate/updater.go` `Run()` stage callbacks (connecting → jumping → flashing → rebooting → verifying), so honoring the wire contract gets the identical dialog for free.
 
-**Chosen approach: factory "recovery" app as the bootloader personality.** ESP-IDF partition table: `factory` = a small recovery firmware (SSDP advertising `BL-A429-ESP_4DH` + fw_type=1, TCP:5000 with GET_FW_INFO/GET_UID/FW_UPDATE/REBOOT), `ota_0` = the main app. Flow mapping:
+**Chosen approach: factory "recovery" app as the bootloader personality.** ESP-IDF partition table: `factory` = a small recovery firmware (SSDP advertising `BL-AES-ESP-DO32-HID` + fw_type=1, TCP:5000 with GET_FW_INFO/GET_UID/FW_UPDATE/REBOOT), `ota_0` = the main app. Flow mapping:
 
 - `JUMP_TO_BOOTLOADER(uid)` in the app → `esp_ota_set_boot_partition(factory)` + restart. The gateway polls GET_FW_INFO for up to 30 s (`waitForMode`) expecting fw_type=1.
 - `FW_UPDATE` in recovery: START carries the 24-byte image header `[firm_size u32 | fletcher32 u32 | aes_iv 16]`; STEPs carry 32-byte AES-128-CBC ciphertext chunks; decrypt and `esp_ota_write` plaintext to `ota_0`. FINISH → verify Fletcher32 (little-endian 16-bit words, both sums mod 0xFFFF, over the 0xFF-padded plaintext — see `aes-gw2/fwupdate/pack.go`) before ACKing, then set boot partition to `ota_0` only on success.

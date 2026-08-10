@@ -1,9 +1,9 @@
-# esp32-aes-gw — A429-ESP_4DH linecard firmware
+# esp32-aes-gw — AES-ESP-DO32-HID linecard firmware
 
 Firmware for an avionics linecard based on the **Waveshare ESP32-S3-ETH**
 module (W5500 Ethernet over SPI). It speaks the aes-gw2 wire protocol
 (SSDP discovery, TCP :5000 control, UDP :10737 stream) and advertises
-itself as **`A429-ESP_4DH`** (recovery/bootloader mode: **`BL-A429-ESP_4DH`**,
+itself as **`AES-ESP-DO32-HID`** (recovery/bootloader mode: **`BL-AES-ESP-DO32-HID`**,
 `fw_type = 1`). The ARINC and discrete pin-driving layers are stubs: all
 commands validate, keep state and ACK exactly like the STM32 sibling
 (`stm32/arinc4i4o`), but no pins are driven and no RX labels are produced
@@ -52,7 +52,7 @@ idf.py set-target esp32s3
 # Application build (runs from ota_0)
 idf.py build
 
-# Recovery build (factory partition, advertises BL-A429-ESP_4DH, serves FW_UPDATE)
+# Recovery build (factory partition, advertises BL-AES-ESP-DO32-HID, serves FW_UPDATE)
 idf.py -B build-recovery -DSDKCONFIG=sdkconfig.recovery \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.recovery" \
        -DRECOVERY_BUILD=1 build
@@ -159,7 +159,7 @@ PY
 #    gateway's release checker (aes-gw2/fwrelease) ignores anything else.
 gh release create v0.1.2 -R fsedano/sim-lc-esp32-aes-gw \
    --target main --title v0.1.2 \
-   --notes "A429-ESP_4DH firmware v0.1.2" \
+   --notes "AES-ESP-DO32-HID firmware v0.1.2" \
    esp32-fw-Release-v0.1.2.bin
 ```
 
@@ -196,9 +196,9 @@ its identity from the MCU's 96-bit UID:
 
 ## Gateway registration
 
-The gateway ignores unknown board_ids: `A429-ESP_4DH` is registered in
+The gateway ignores unknown board_ids: `AES-ESP-DO32-HID` is registered in
 `aes-gw2/linecard/protocol/hid/products.go` (`RegisterProduct`, product
-`A429_ESP_4DH`, `BoardIDs: []string{"A429-ESP_4DH"}`, capabilities: ARINC
+`AES_ESP_DO32_HID`, `BoardIDs: []string{"AES-ESP-DO32-HID"}`, capabilities: ARINC
 4 in / 4 out plus a discrete `Extra{Inputs:1, Outputs:32}` group plus a HID
 `Extra{Inputs:8, Outputs:32}` group — HID convention: Inputs = axes,
 Outputs = buttons — `FwRepo: fsedano/sim-lc-esp32-aes-gw`, `MinFwVersion:

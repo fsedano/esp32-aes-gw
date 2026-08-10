@@ -10,7 +10,7 @@
 static const ssdp_ident_t ID = {
     .uuid      = "240ac4112233970bf4594777",
     .ip        = "192.168.1.50",
-    .board_id  = "A429-ESP_4DH",
+    .board_id  = "AES-ESP-DO32-HID",
     .fw_tag    = "v0.1.0",
     .serial    = "240ac4112233",
     .http_port = 80,
@@ -26,7 +26,7 @@ int main(void){
         "Host:239.255.255.250:1900\r\n"
         "Location:http://192.168.1.50:80/description.xml\r\n"
         "Cache-Control:max-age=10\r\n"
-        "Server:A429-ESP_4DH/v0.1.0 UPnP/1.0\r\n"
+        "Server:AES-ESP-DO32-HID/v0.1.0 UPnP/1.0\r\n"
         "USN:240ac4112233970bf4594777::upnp:rootdevice\r\n"
         "NT:upnp:rootdevice\r\n"
         "NTS:ssdp:alive\r\n\r\n";
@@ -40,7 +40,7 @@ int main(void){
         "Host:239.255.255.250:1900\r\n"
         "Location:http://192.168.1.50:80/description.xml\r\n"
         "Cache-Control:max-age=10\r\n"
-        "Server:A429-ESP_4DH/v0.1.0 UPnP/1.0\r\n"
+        "Server:AES-ESP-DO32-HID/v0.1.0 UPnP/1.0\r\n"
         "USN:240ac4112233970bf4594777::upnp:rootdevice\r\n"
         "ST:upnp:rootdevice\r\n\r\n";
     CHECK(n == strlen(want_reply));
@@ -51,12 +51,12 @@ int main(void){
     buf[n] = '\0';
     char *server = strstr(buf, "Server:");
     CHECK(server != NULL);
-    CHECK(strncmp(server, "Server:A429-ESP_4DH/", 20) == 0);
+    CHECK(strncmp(server, "Server:AES-ESP-DO32-HID/", 24) == 0);
     /* Bootloader-mode contract: recovery build prefixes "BL-". */
 #ifdef RECOVERY_BUILD
     CHECK(strncmp(BOARD_INFO_SHORT_ID, "BL-", 3) == 0);
 #else
-    CHECK(strncmp(BOARD_INFO_SHORT_ID, "A429-ESP_4DH", 13) == 0);
+    CHECK(strncmp(BOARD_INFO_SHORT_ID, "AES-ESP-DO32-HID", 17) == 0);
 #endif
 
     /* 24-char UUID in the USN, no "uuid:" prefix (gateway strips it when

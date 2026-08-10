@@ -120,9 +120,9 @@ static const uint8_t s_desc_configuration[] = {
 static const char *s_string_desc[] = {
     (const char[]){ 0x09, 0x04 },       /* 0: language = English (US)  */
     "fsedano",                          /* 1: manufacturer             */
-    "A429-ESP_4DH Joystick",            /* 2: product                  */
+    "AES-ESP-DO32-HID Joystick",            /* 2: product                  */
     "000000000000",                     /* 3: serial (placeholder)     */
-    "A429-ESP_4DH HID",                 /* 4: HID interface            */
+    "AES-ESP-DO32-HID HID",                 /* 4: HID interface            */
 };
 
 /* ---------------------------------------------------------------------- */

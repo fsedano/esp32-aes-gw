@@ -5,7 +5,7 @@
   *
   *          Mirrors arinc4i4o's board_info.h. The SSDP SERVER board_id token
   *          is what the gateway uses to identify the card type; this card
-  *          advertises "A429-ESP_4DH" (registered gateway-side as a distinct
+  *          advertises "AES-ESP-DO32-HID" (registered gateway-side as a distinct
   *          product from the STM32 "A429-8BD" and from the pre-HID
   *          "A429-ESP_4D"). The recovery build advertises
   *          the same identity with a "BL-" prefix and fw_type = 1, which is
@@ -29,19 +29,25 @@ extern "C" {
 #define VERSION_COMMIT "00000000"
 #endif
 
+/* Field-width note: GET_HW_INFO carries SHORT_ID in a fixed 16-byte,
+   NUL-padded field. "AES-ESP-DO32-HID" fills it exactly (16 chars, no
+   padding); the 19-char "BL-" variant truncates THERE ONLY — harmless,
+   since product resolution and bootloader detection both key on the SSDP
+   SERVER token (unbounded), and the gateway strips "BL-" before matching
+   BoardIDs. */
 #ifdef RECOVERY_BUILD
-#define BOARD_FRIENDLY_NAME     "Arinc429 ESP Interface HID (BL)"
-#define BOARD_MODEL_NAME        "Arinc429 ESP 4I/4O HID"
-#define BOARD_INFO_MODEL        "BL-A429-ESPH"
-#define BOARD_INFO_SHORT_ID     "BL-A429-ESP_4DH"
+#define BOARD_FRIENDLY_NAME     "AES ESP DO32 HID Interface (BL)"
+#define BOARD_MODEL_NAME        "AES ESP DO32 HID"
+#define BOARD_INFO_MODEL        "BL-AES-ESP-DO32"
+#define BOARD_INFO_SHORT_ID     "BL-AES-ESP-DO32-HID"
 #define BOARD_INFO_FW_TAG       ("bl-" VERSION_STRING)
 #define BOARD_INFO_FW_TYPE      ((uint8_t) 1)   /* GET_FW_INFO: bootloader */
 #define BOARD_INFO_FW_BRANCH    "recovery"
 #else
-#define BOARD_FRIENDLY_NAME     "Arinc429 ESP Interface HID"
-#define BOARD_MODEL_NAME        "Arinc429 ESP 4I/4O HID"
-#define BOARD_INFO_MODEL        "A429-ESPH"
-#define BOARD_INFO_SHORT_ID     "A429-ESP_4DH"
+#define BOARD_FRIENDLY_NAME     "AES ESP DO32 HID Interface"
+#define BOARD_MODEL_NAME        "AES ESP DO32 HID"
+#define BOARD_INFO_MODEL        "AES-ESP-DO32"
+#define BOARD_INFO_SHORT_ID     "AES-ESP-DO32-HID"
 #define BOARD_INFO_FW_TAG       (VERSION_STRING)
 #define BOARD_INFO_FW_TYPE      ((uint8_t) 0)   /* GET_FW_INFO: application */
 #define BOARD_INFO_FW_BRANCH    "esp32"
