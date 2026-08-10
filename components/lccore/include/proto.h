@@ -59,6 +59,9 @@ extern "C" {
 #define CMD_DISCRETE_SETUP      0x30        /* host->dev, TCP (ACKed)         */
 #define CMD_DISCRETE_SET        0x31        /* host->dev, UDP (or TCP+ACK)    */
 #define CMD_DISCRETE_STATE      0x32        /* dev->host, UDP                 */
+#define CMD_HID_SETUP           0x33        /* host->dev, TCP (ACKed)         */
+#define CMD_HID_SET             0x34        /* host->dev, UDP (or TCP+ACK)    */
+#define CMD_HID_STATE           0x35        /* dev->host, UDP                 */
 #define CMD_JUMP_TO_BOOTLOADER  0xAA
 #define CMD_PING                0xFA
 #define CMD_REBOOT              0xFB
@@ -157,6 +160,47 @@ typedef struct __attribute__((packed)) {
     uint8_t  link;
     uint8_t  seq;
 } proto_discrete_state_t;
+
+/* USB HID joystick channel group (8 axes + 32 buttons), wire doc §12.
+   The card presents a HID gamepad to the PC on its USB port; the host
+   drives axis/button values over these commands. */
+#define HID_NUM_AXES        8
+#define HID_NUM_BUTTONS     32
+
+/* HID_SETUP (0x33), 4 bytes <BBH>: enable/disable the HID subsystem and set
+   the STATE heartbeat period. flags is reserved (0). report_ms 0 ->
+   default (500). TCP only, ACKed. */
+typedef struct __attribute__((packed)) {
+    uint8_t  enable;
+    uint8_t  flags;
+    uint16_t report_ms;
+} proto_hid_setup_t;
+
+/* HID_SET (0x34), 25 bytes <B 8h I I>: axis i is written iff bit i of
+   axis_mask is set (axes int16, -32767..32767, center 0); buttons merge
+   desired = (desired & ~btn_apply_mask) | (btn_values & btn_apply_mask).
+   Idempotent; UDP fire-and-forget or TCP with ACK. */
+typedef struct __attribute__((packed)) {
+    uint8_t  axis_mask;
+    int16_t  axes[HID_NUM_AXES];
+    uint32_t btn_apply_mask;
+    uint32_t btn_values;
+} proto_hid_set_t;
+
+/* HID_STATE (0x35), 22 bytes <8h I B B>: dev->host over UDP on any change of
+   axes/buttons/usb_mounted and every report_ms. usb_mounted reflects whether
+   a USB host has the joystick enumerated and not suspended — it is a link
+   indicator only; SETs latch and confirm regardless. */
+typedef struct __attribute__((packed)) {
+    int16_t  axes[HID_NUM_AXES];
+    uint32_t buttons;
+    uint8_t  usb_mounted;
+    uint8_t  seq;
+} proto_hid_state_t;
+
+_Static_assert(sizeof(proto_hid_setup_t) == 4,  "HID_SETUP layout");
+_Static_assert(sizeof(proto_hid_set_t)   == 25, "HID_SET layout");
+_Static_assert(sizeof(proto_hid_state_t) == 22, "HID_STATE layout");
 
 /* DEVICE_STATUS (0x0E), 36 bytes <9I>: dev->host over TCP, ~1 Hz. */
 typedef struct __attribute__((packed)) {

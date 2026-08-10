@@ -1,0 +1,9 @@
+# Managed components (ESP Component Registry). First build after a clean
+# checkout needs network access; the resolved tree lands in
+# managed_components/ (gitignored, as is dependencies.lock).
+dependencies:
+  idf: ">=5.5.0"
+  # TinyUSB device stack wrapper: the application build presents a USB HID
+  # joystick on the ESP32-S3 OTG port (main/hid_usb.c). The recovery build
+  # compiles without hid_usb.c and links none of it.
+  espressif/esp_tinyusb: "^1.7.0"

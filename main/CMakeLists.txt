@@ -9,6 +9,12 @@ set(srcs
     "fwup_port.c"       # body compiles empty unless RECOVERY_BUILD
 )
 
+# USB HID joystick backend (TinyUSB): application personality only. The
+# recovery build never claims the OTG PHY, keeping USB-Serial-JTAG alive.
+if(NOT RECOVERY_BUILD)
+    list(APPEND srcs "hid_usb.c")
+endif()
+
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "."

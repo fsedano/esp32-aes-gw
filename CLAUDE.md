@@ -8,7 +8,9 @@ Firmware for an avionics linecard based on an **ESP32-S3-ETH module**. It is a s
 
 **Initial deliverable:** firmware functionally equivalent to the arinc4i4o firmware, but with the actual pin-driving layer stubbed out, and advertising a **different board identifier** so the gateway can distinguish this card type from the STM32 one.
 
-Toolchain: **ESP-IDF v5.5.1** installed at `~/esp/esp-idf` (activate with `source ~/esp/esp-idf/export.sh`). Board: **Waveshare ESP32-S3-ETH** — W5500 Ethernet over SPI: SCLK=GPIO13, MISO=GPIO12, MOSI=GPIO11, CS=GPIO14, INT=GPIO10, RST=GPIO9. USB (native USB-Serial-JTAG) appears as `/dev/cu.usbmodem*`.
+Toolchain: **ESP-IDF v5.5.1** installed at `~/esp/esp-idf` (activate with `source ~/esp/esp-idf/export.sh`). Board: **Waveshare ESP32-S3-ETH** — W5500 Ethernet over SPI: SCLK=GPIO13, MISO=GPIO12, MOSI=GPIO11, CS=GPIO14, INT=GPIO10, RST=GPIO9.
+
+**USB-C port split personality:** in the **application** build the port is a TinyUSB **HID joystick** (8×16-bit axes + 32 buttons, `main/hid_usb.c`) — the OTG PHY is claimed at boot, so there is NO USB console/flash there while the app runs (logs on UART0; updates are OTA over ethernet). In the **recovery** build the port stays USB-Serial-JTAG and appears as `/dev/cu.usbmodem*` (bench console + esptool). ROM download mode (hold BOOT) always works as last resort. TinyUSB comes from the managed component `espressif/esp_tinyusb` (`main/idf_component.yml`; first build after a clean checkout needs network, `managed_components/` + `dependencies.lock` are gitignored).
 
 Repos: this repo's `origin` is `fsedano/esp32-aes-gw` (private, source). **OTA release binaries go to a separate public repo `fsedano/sim-lc-esp32-aes-gw`** — this follows the existing convention (the STM32 card's FwRepo is `fsedano/sim-lc-A429-8BD`), and it is what the gateway's `FwRepo` points at for this product.
 
@@ -31,13 +33,13 @@ Three channels, all multibyte fields little-endian:
 
 Framing on both TCP and UDP: `head 0xAABB (LE) | packet_id (1) | payload_size (1, max 250) | cmd (1) | payload | checksum (8-bit sum from packet_id through payload)`. ACK envelope: echoed `packet_id` + `status_code (u32 LE)` + extra.
 
-Core commands the card must answer: `GET_FW_INFO 0x06` (the gateway considers a card "ready" once this answers; byte 52 = 0 app / 1 bootloader), `GET_HW_INFO 0x0D`, `GET_UID 0x09` (raw 12-byte reply, no ACK envelope; the UID is the auth key for `JUMP_TO_BOOTLOADER 0xAA` and `REBOOT 0xFB`), `PING 0xFA`, ARINC channel commands `0x10`–`0x17`, discrete `0x30`–`0x32`, `SET_LOG_LEVEL 0x25`, `FIND_ME 0x22`, `FW_UPDATE 0x0F` (bootloader mode only). A dropped TCP control session must reset all channels to disabled.
+Core commands the card must answer: `GET_FW_INFO 0x06` (the gateway considers a card "ready" once this answers; byte 52 = 0 app / 1 bootloader), `GET_HW_INFO 0x0D`, `GET_UID 0x09` (raw 12-byte reply, no ACK envelope; the UID is the auth key for `JUMP_TO_BOOTLOADER 0xAA` and `REBOOT 0xFB`), `PING 0xFA`, ARINC channel commands `0x10`–`0x17`, discrete `0x30`–`0x32`, HID joystick `0x33`–`0x35` (`HID_SETUP` TCP/ACKed, `HID_SET` dual-transport, `HID_STATE` dev→host telemetry with `usb_mounted` link flag — mirrors the discrete choreography; glue in `lccore/hid_glue.c`, USB behind the `hid_port.h` seam), `SET_LOG_LEVEL 0x25`, `FIND_ME 0x22`, `FW_UPDATE 0x0F` (bootloader mode only). A dropped TCP control session must reset all channels to disabled — for HID that also centers all axes and releases all buttons on USB.
 
 ## Card Identity (the part that MUST differ from arinc4i4o)
 
-This card's board_id is **`A429-ESP_4D`** (the equivalent of `BOARD_INFO_SHORT_ID` in the STM32 firmware, where all identity constants live in `board_info.h`/`board_info.c`). The bootloader-mode variant is `BL-A429-ESP_4D`. Do not reuse the tokens already registered in the gateway: `A429-8`, `A429-8B`, `A429-8BD`, `ARI-10`, `SSD-10`, `SSD3-10`.
+This card's board_id is **`A429-ESP_4DH`** (the equivalent of `BOARD_INFO_SHORT_ID` in the STM32 firmware, where all identity constants live in `board_info.h`/`board_info.c`; here in `lccore/include/board_id.h`). The bootloader-mode variant is `BL-A429-ESP_4DH`. Do not reuse the tokens already registered in the gateway: `A429-8`, `A429-8B`, `A429-8BD`, `ARI-10`, `SSD-10`, `SSD3-10`, and the pre-HID `A429-ESP_4D` (which this firmware's ancestors advertised — cards on that product migrate here via OTA, both products share `FwRepo`).
 
-The gateway silently ignores unregistered board_ids, so `A429-ESP_4D` must also be registered gateway-side: add a `linecard.RegisterProduct(...)` entry in `/Users/fsedano/code/aes-gw2/linecard/protocol/arinc/products.go` `init()` with a new product ID (e.g. `A429_ESP_4D`), `BoardIDs: []string{"A429-ESP_4D"}`, capabilities, and (later) `FwRepo`/`MinFwVersion` for OTA management. `RegisterProduct` panics on duplicate IDs, so collisions surface at gateway startup.
+The gateway registers `A429-ESP_4DH` as product `A429_ESP_4DH` in `/Users/fsedano/code/aes-gw2/linecard/protocol/hid/products.go`: ARINC 4/4 primary + `Extra` discrete `{Inputs:1, Outputs:32}` + `Extra` HID `{Inputs:8, Outputs:32}` (HID convention: Inputs = axis count, Outputs = button count). `RegisterProduct` panics on duplicate IDs, so collisions surface at gateway startup.
 
 Identity requirements on the wire: a stable 24-char UUID consistent across all SSDP messages (USN header), and a stable 12-byte UID reported in GET_UID/GET_HW_INFO. The STM32 derives MAC/serial/hostname/UUID from its 96-bit hardware UID; on ESP32-S3 derive equivalents from eFuse MAC.
 
@@ -49,7 +51,7 @@ The arinc4i4o firmware has a clean seam the port should keep: `comm.c` never tou
 
 Requirement: identical UX to the STM32 card — the gateway's upgrade dialog works unchanged, and the card is always recoverable from bootloader mode. The dialog is driven entirely by `aes-gw2/fwupdate/updater.go` `Run()` stage callbacks (connecting → jumping → flashing → rebooting → verifying), so honoring the wire contract gets the identical dialog for free.
 
-**Chosen approach: factory "recovery" app as the bootloader personality.** ESP-IDF partition table: `factory` = a small recovery firmware (SSDP advertising `BL-A429-ESP_4D` + fw_type=1, TCP:5000 with GET_FW_INFO/GET_UID/FW_UPDATE/REBOOT), `ota_0` = the main app. Flow mapping:
+**Chosen approach: factory "recovery" app as the bootloader personality.** ESP-IDF partition table: `factory` = a small recovery firmware (SSDP advertising `BL-A429-ESP_4DH` + fw_type=1, TCP:5000 with GET_FW_INFO/GET_UID/FW_UPDATE/REBOOT), `ota_0` = the main app. Flow mapping:
 
 - `JUMP_TO_BOOTLOADER(uid)` in the app → `esp_ota_set_boot_partition(factory)` + restart. The gateway polls GET_FW_INFO for up to 30 s (`waitForMode`) expecting fw_type=1.
 - `FW_UPDATE` in recovery: START carries the 24-byte image header `[firm_size u32 | fletcher32 u32 | aes_iv 16]`; STEPs carry 32-byte AES-128-CBC ciphertext chunks; decrypt and `esp_ota_write` plaintext to `ota_0`. FINISH → verify Fletcher32 (little-endian 16-bit words, both sums mod 0xFFFF, over the 0xFF-padded plaintext — see `aes-gw2/fwupdate/pack.go`) before ACKing, then set boot partition to `ota_0` only on success.

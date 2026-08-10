@@ -5,3 +5,10 @@
 # default log level saves a little flash and boot time.
 
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Recovery keeps the USB-Serial-JTAG console on the USB-C port: no TinyUSB
+# in this personality (hid_usb.c is excluded), so the OTG PHY is never
+# claimed and USB-C stays a bench console/flash port.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=n
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+CONFIG_TINYUSB_HID_COUNT=0

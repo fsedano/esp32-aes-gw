@@ -30,6 +30,7 @@
 #include "identity.h"
 #include "arinc_glue.h"
 #include "discrete_glue.h"
+#include "hid_glue.h"
 #include "lc_log.h"
 
 #ifdef RECOVERY_BUILD
@@ -60,6 +61,9 @@ static void channels_reset(void){
     memset(g_chnl, 0, sizeof(g_chnl));
     atx_glue_reset();       /* clear the (stub) TX engine state           */
     discrete_glue_reset();  /* disable discrete subsystem -> relays off   */
+#ifndef RECOVERY_BUILD
+    hid_glue_reset();       /* center axes, release buttons on USB        */
+#endif
 }
 
 bool comm_core_any_channel_enabled(void){
@@ -584,6 +588,44 @@ static void handle_discrete_set(uint8_t req_id, const uint8_t *payload,
     }
 }
 
+/* ====================================================================== */
+/* HID joystick commands (wire doc §12)                                   */
+/* ====================================================================== */
+
+/* HID_SETUP (0x33): TCP only; a copy arriving over UDP is ignored so the
+   fire-and-forget data path never mutates config (discrete parity). */
+static void handle_hid_setup(uint8_t req_id, const uint8_t *payload,
+                             uint8_t len, uint8_t src){
+    if(src != COMM_SRC_TCP){
+        return;                                 /* config is TCP-only */
+    }
+    uint32_t status;
+    if(len < sizeof(proto_hid_setup_t)){
+        status = PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT;
+    }else{
+        proto_hid_setup_t c;                    /* payload may be unaligned */
+        memcpy(&c, payload, sizeof(c));
+        status = hid_glue_setup(c.enable, c.flags, c.report_ms);
+    }
+    comm_send_ack(CMD_HID_SETUP, req_id, status, NULL, 0);
+}
+
+/* HID_SET (0x34): both transports; ACK only when it arrived on TCP. */
+static void handle_hid_set(uint8_t req_id, const uint8_t *payload,
+                           uint8_t len, uint8_t src){
+    uint32_t status = PROTO_ST_OK;
+    if(len < sizeof(proto_hid_set_t)){
+        status = PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT;
+    }else{
+        proto_hid_set_t c;                      /* payload may be unaligned */
+        memcpy(&c, payload, sizeof(c));
+        hid_glue_set(c.axis_mask, c.axes, c.btn_apply_mask, c.btn_values);
+    }
+    if(src == COMM_SRC_TCP){
+        comm_send_ack(CMD_HID_SET, req_id, status, NULL, 0);
+    }
+}
+
 #endif /* !RECOVERY_BUILD */
 
 /* ====================================================================== */
@@ -630,6 +672,9 @@ static void comm_dispatch(uint8_t cmd, uint8_t req_id,
 
         case CMD_DISCRETE_SETUP:    handle_discrete_setup(req_id, payload, len, src); break;
         case CMD_DISCRETE_SET:      handle_discrete_set(req_id, payload, len, src);   break;
+
+        case CMD_HID_SETUP:         handle_hid_setup(req_id, payload, len, src); break;
+        case CMD_HID_SET:           handle_hid_set(req_id, payload, len, src);   break;
 
         case CMD_SET_LOG_LEVEL:
             /* TCP only; silently ignored on UDP (wire doc §10.3). */

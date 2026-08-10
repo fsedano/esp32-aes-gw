@@ -38,6 +38,8 @@
 #include "comm_core.h"
 #include "discrete_glue.h"
 #include "find_me.h"
+#include "hid_glue.h"
+#include "hid_port.h"
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
@@ -375,6 +377,12 @@ static void comm_task(void *arg){
 
     for(;;){
         while(!net_eth_ready()){
+#ifndef RECOVERY_BUILD
+            /* Keep the USB pump alive with the network down: a pending
+               reset-to-center report (e.g. after a session drop) must still
+               reach the PC, and a remount must re-push the latched state. */
+            hid_port_loop();
+#endif
             vTaskDelay(pdMS_TO_TICKS(200));
         }
         uint32_t bound_ip = net_eth_get_ip4();
@@ -423,6 +431,7 @@ static void comm_task(void *arg){
             log_flush_service();
 #ifndef RECOVERY_BUILD
             discrete_glue_loop();
+            hid_glue_loop();
             status_service();
 #else
             fwup_tick();

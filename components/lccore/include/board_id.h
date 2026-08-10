@@ -5,8 +5,9 @@
   *
   *          Mirrors arinc4i4o's board_info.h. The SSDP SERVER board_id token
   *          is what the gateway uses to identify the card type; this card
-  *          advertises "A429-ESP_4D" (registered gateway-side as a distinct
-  *          product from the STM32 "A429-8BD"). The recovery build advertises
+  *          advertises "A429-ESP_4DH" (registered gateway-side as a distinct
+  *          product from the STM32 "A429-8BD" and from the pre-HID
+  *          "A429-ESP_4D"). The recovery build advertises
   *          the same identity with a "BL-" prefix and fw_type = 1, which is
   *          how clients recognize a board sitting in bootloader mode.
   ******************************************************************************
@@ -29,18 +30,18 @@ extern "C" {
 #endif
 
 #ifdef RECOVERY_BUILD
-#define BOARD_FRIENDLY_NAME     "Arinc429 ESP Interface (BL)"
-#define BOARD_MODEL_NAME        "Arinc429 ESP 4I/4O"
-#define BOARD_INFO_MODEL        "BL-A429-ESP"
-#define BOARD_INFO_SHORT_ID     "BL-A429-ESP_4D"
+#define BOARD_FRIENDLY_NAME     "Arinc429 ESP Interface HID (BL)"
+#define BOARD_MODEL_NAME        "Arinc429 ESP 4I/4O HID"
+#define BOARD_INFO_MODEL        "BL-A429-ESPH"
+#define BOARD_INFO_SHORT_ID     "BL-A429-ESP_4DH"
 #define BOARD_INFO_FW_TAG       ("bl-" VERSION_STRING)
 #define BOARD_INFO_FW_TYPE      ((uint8_t) 1)   /* GET_FW_INFO: bootloader */
 #define BOARD_INFO_FW_BRANCH    "recovery"
 #else
-#define BOARD_FRIENDLY_NAME     "Arinc429 ESP Interface"
-#define BOARD_MODEL_NAME        "Arinc429 ESP 4I/4O"
-#define BOARD_INFO_MODEL        "A429-ESP"
-#define BOARD_INFO_SHORT_ID     "A429-ESP_4D"
+#define BOARD_FRIENDLY_NAME     "Arinc429 ESP Interface HID"
+#define BOARD_MODEL_NAME        "Arinc429 ESP 4I/4O HID"
+#define BOARD_INFO_MODEL        "A429-ESPH"
+#define BOARD_INFO_SHORT_ID     "A429-ESP_4DH"
 #define BOARD_INFO_FW_TAG       (VERSION_STRING)
 #define BOARD_INFO_FW_TYPE      ((uint8_t) 0)   /* GET_FW_INFO: application */
 #define BOARD_INFO_FW_BRANCH    "esp32"
