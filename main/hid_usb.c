@@ -80,9 +80,15 @@ static const uint8_t s_hid_report_desc[] = {
 
 /* Espressif VID with a PID in the community 0x8xxx space. Lab/private
    product; if this ever ships publicly, request a real PID via
-   github.com/espressif/usb-pids (free) instead. */
+   github.com/espressif/usb-pids (free) instead.
+
+   PID history — bump on any change that Windows must see as a NEW device:
+   Windows caches the joy.cpl name (registry OEMName) keyed by VID&PID and
+   never re-reads the product string for a PID it has seen, so a rename of
+   an existing PID keeps showing the old name. 0x8110 was the pre-rename
+   "A429-ESP_4DH Joystick"; 0x8111 is "AES-ESP-DO32-HID Joystick". */
 #define HID_USB_VID     0x303A
-#define HID_USB_PID     0x8110
+#define HID_USB_PID     0x8111
 
 static const tusb_desc_device_t s_desc_device = {
     .bLength            = sizeof(tusb_desc_device_t),
