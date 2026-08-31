@@ -33,10 +33,11 @@
 #define M31_MAX_OUTPUTS           32u
 #define M31_MAX_INPUTS            1u
 #define M31_POLL_MS               100u
-#define M31_REPROBE_MS            1000u
 #define M31_REPLY_MS              200u
 #define M31_INTERFRAME_MS         4u
 #define M31_LINK_FAILURES         3u
+#define M31_STARTUP_PROBES        3u
+#define M31_STARTUP_RETRY_MS      250u
 
 #define MODBUS_FC_READ_COILS      0x01u
 #define MODBUS_FC_READ_INPUTS     0x02u
@@ -51,6 +52,8 @@ typedef struct {
     SemaphoreHandle_t lock;
     bool enabled;
     uint32_t desired;
+    uint8_t output_count;        /* immutable after startup probe */
+    uint8_t input_count;         /* immutable after startup probe */
     discrete_backend_state_t state;
 } m31_shared_t;
 
@@ -158,7 +161,8 @@ static bool write_coil(uint16_t address, bool on){
 
 /* M31 maps host and expansion channels contiguously. Probe addresses rather
    than request counts because firmware 1.3 masks the count field to 8 bits.
-   The returned count is capped at the product's 32-bit wire width. */
+   The returned count is capped at this backend's 32-bit local process image;
+   the Ethernet range protocol itself is not limited to 32 channels. */
 static uint8_t probe_count(uint8_t function, uint8_t limit){
     uint32_t ignored;
     if(!read_bits(function, 0, 1, &ignored)){
@@ -258,34 +262,21 @@ static bool apply_target(uint32_t current, uint32_t target, uint8_t count){
 
 static void m31_task(void *arg){
     (void)arg;
-    uint8_t output_count = 0;
-    uint8_t input_count = 0;
+    const uint8_t output_count = s_m31.output_count;
+    const uint8_t input_count = s_m31.input_count;
     uint32_t relays = 0;
     uint32_t inputs = 0;
     unsigned failures = 0;
     bool announced_up = false;
-    bool announced_shape = false;
+
+    if(output_count == 0){
+        shared_publish(0, 0, 0, false);
+        LOG_INF("m31: no output channels in boot population; link down");
+        vTaskDelete(NULL);
+        return;
+    }
 
     for(;;){
-        if(output_count == 0){
-            output_count = probe_count(MODBUS_FC_READ_COILS, M31_MAX_OUTPUTS);
-            input_count = probe_count(MODBUS_FC_READ_INPUTS, M31_MAX_INPUTS);
-
-            /* Until the wire protocol carries actual channel counts, any
-               installation with at least one mapped output is usable. */
-            if(output_count == 0){
-                shared_publish(relays, 0, 0, false);
-                if(!announced_shape){
-                    LOG_INF("m31: no output channels detected; link down");
-                    announced_shape = true;
-                }
-                vTaskDelay(pdMS_TO_TICKS(M31_REPROBE_MS));
-                continue;
-            }
-            announced_shape = false;
-            failures = 0;
-        }
-
         bool ok = read_bits(MODBUS_FC_READ_COILS, 0, output_count, &relays);
         if(ok && input_count > 0){
             ok = read_bits(MODBUS_FC_READ_INPUTS, 0, input_count, &inputs);
@@ -322,8 +313,6 @@ static void m31_task(void *arg){
             failures++;
             if(failures >= M31_LINK_FAILURES){
                 shared_link_down(relays);
-                output_count = 0;
-                input_count = 0;
                 if(announced_up){
                     LOG_INF("m31: Modbus link down after %u failed polls",
                             failures);
@@ -382,10 +371,34 @@ void m31_modbus_init(void){
         return;
     }
 
-    LOG_INF("m31: starting Modbus RTU on UART0 GPIO%d/%d, unit %u",
+    /* The capability descriptor must remain byte-identical for this boot.
+       Probe before SSDP/comm start and freeze the discovered population. */
+    for(unsigned attempt = 0; attempt < M31_STARTUP_PROBES; attempt++){
+        s_m31.output_count = probe_count(MODBUS_FC_READ_COILS,
+                                         M31_MAX_OUTPUTS);
+        s_m31.input_count = probe_count(MODBUS_FC_READ_INPUTS,
+                                        M31_MAX_INPUTS);
+        if(s_m31.output_count > 0){
+            break;
+        }
+        if(attempt + 1u < M31_STARTUP_PROBES){
+            vTaskDelay(pdMS_TO_TICKS(M31_STARTUP_RETRY_MS));
+        }
+    }
+
+    LOG_INF("m31: boot population %u DO/%u DI; UART0 GPIO%d/%d unit %u",
+            s_m31.output_count, s_m31.input_count,
             M31_TX_GPIO, M31_RX_GPIO, M31_UNIT);
     if(xTaskCreate(m31_task, "m31_modbus", 4096, NULL, 5, NULL) != pdPASS){
         LOG_INF("m31: worker task creation failed");
         uart_driver_delete(M31_UART);
     }
+}
+
+uint16_t m31_modbus_output_count(void){
+    return s_m31.output_count;
+}
+
+uint16_t m31_modbus_input_count(void){
+    return s_m31.input_count;
 }

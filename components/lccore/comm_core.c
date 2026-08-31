@@ -27,6 +27,7 @@
 #include "comm_core.h"
 #include "proto.h"
 #include "board_id.h"
+#include "capabilities.h"
 #include "identity.h"
 #include "arinc_glue.h"
 #include "discrete_glue.h"
@@ -120,19 +121,20 @@ bool comm_core_send_udp(uint8_t cmd, const uint8_t *payload, uint8_t len){
     return g_ops->send_udp(pkt, total);
 }
 
-/* ACK envelope byte counts: [req_id | status(LE32)] + largest extra, the
-   53-byte GET_FW_INFO / GET_HW_INFO block (comm_core_pack_*_info). */
+/* ACK envelope byte counts: [req_id | status(LE32)] + up to 244 extra bytes.
+   GET_CAPABILITIES uses 242 (u16 total + a 240-byte descriptor chunk). */
 #define COMM_ACK_ENVELOPE_LEN   5u
 #define COMM_INFO_BLOCK_LEN     53u
-_Static_assert(COMM_ACK_ENVELOPE_LEN + COMM_INFO_BLOCK_LEN <= PROTO_MAX_PAYLOAD,
-               "ACK envelope + info block must fit one frame payload");
+#define COMM_ACK_EXTRA_MAX      (PROTO_MAX_PAYLOAD - COMM_ACK_ENVELOPE_LEN)
+_Static_assert(COMM_ACK_EXTRA_MAX >= (2u + CAPS_CHUNK_MAX),
+               "capability chunk must fit one ACK");
 
 /* Standard ACK envelope: [req_id | status(LE32) | extra]. */
 static void comm_send_ack(uint8_t cmd, uint8_t req_id, uint32_t status,
                           const uint8_t *extra, uint8_t extra_len){
-    uint8_t payload[COMM_ACK_ENVELOPE_LEN + COMM_INFO_BLOCK_LEN];
-    if(extra_len > (uint8_t)(sizeof(payload) - COMM_ACK_ENVELOPE_LEN)){
-        extra_len = (uint8_t)(sizeof(payload) - COMM_ACK_ENVELOPE_LEN);
+    uint8_t payload[PROTO_MAX_PAYLOAD];
+    if(extra_len > COMM_ACK_EXTRA_MAX){
+        extra_len = COMM_ACK_EXTRA_MAX;
     }
     payload[0] = req_id;
     payload[1] = (uint8_t)(status);
@@ -195,6 +197,57 @@ static void handle_get_hw_info(uint8_t req_id){
 static void handle_get_uid(void){
     comm_core_send_tcp(CMD_GET_UID, identity_uid(), 12);
 }
+
+#ifndef RECOVERY_BUILD
+/* GET_CAPABILITIES (0x0C): stateless offset-based reads of the immutable
+   boot descriptor. The 2-byte total length is repeated in every ACK. */
+static void handle_get_capabilities(uint8_t req_id, const uint8_t *payload,
+                                    uint8_t len){
+    if(len < 3u){
+        comm_send_ack(CMD_GET_CAPABILITIES, req_id,
+                      PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT, NULL, 0);
+        return;
+    }
+    if(!capabilities_available()){
+        comm_send_ack(CMD_GET_CAPABILITIES, req_id, PROTO_ST_ERROR, NULL, 0);
+        return;
+    }
+
+    uint8_t version = payload[0];
+    if(version != CAPS_DESC_VERSION){
+        uint8_t supported[2] = { CAPS_DESC_VERSION, CAPS_DESC_VERSION };
+        LOG_INF("caps: requested v%u unsupported; available v%u",
+                version, CAPS_DESC_VERSION);
+        comm_send_ack(CMD_GET_CAPABILITIES, req_id,
+                      PROTO_ST_CAPS_ERR_VERSION_UNSUPPORTED,
+                      supported, sizeof(supported));
+        return;
+    }
+
+    uint16_t offset = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
+    uint16_t total_len = 0;
+    const uint8_t *blob = capabilities_blob(&total_len);
+    if(blob == NULL || offset > total_len){
+        comm_send_ack(CMD_GET_CAPABILITIES, req_id, PROTO_ST_ERROR, NULL, 0);
+        return;
+    }
+
+    uint16_t chunk_len = (uint16_t)(total_len - offset);
+    if(chunk_len > CAPS_CHUNK_MAX){
+        chunk_len = CAPS_CHUNK_MAX;
+    }
+    LOG_INF("caps: serving v%u offset %u/%u, chunk %u",
+            version, offset, total_len, chunk_len);
+    uint8_t extra[2u + CAPS_CHUNK_MAX];
+    extra[0] = (uint8_t)total_len;
+    extra[1] = (uint8_t)(total_len >> 8);
+    if(chunk_len > 0){
+        memcpy(extra + 2, blob + offset, chunk_len);
+    }
+    comm_send_ack(CMD_GET_CAPABILITIES, req_id, PROTO_ST_OK, extra,
+                  (uint8_t)(chunk_len + 2u));
+}
+#endif
 
 /* ====================================================================== */
 /* Bootloader entry / reboot                                              */
@@ -564,7 +617,7 @@ static void handle_discrete_setup(uint8_t req_id, const uint8_t *payload,
         return;                                 /* config is TCP-only */
     }
     uint32_t status;
-    if(len < sizeof(proto_discrete_setup_t)){
+    if(len != sizeof(proto_discrete_setup_t)){
         status = PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT;
     }else{
         const proto_discrete_setup_t *c = (const proto_discrete_setup_t *)payload;
@@ -577,11 +630,41 @@ static void handle_discrete_setup(uint8_t req_id, const uint8_t *payload,
 static void handle_discrete_set(uint8_t req_id, const uint8_t *payload,
                                 uint8_t len, uint8_t src){
     uint32_t status = PROTO_ST_OK;
-    if(len < sizeof(proto_discrete_set_t)){
+    if(len < PROTO_DISCRETE_SET_HEADER_SIZE){
         status = PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT;
     }else{
-        const proto_discrete_set_t *c = (const proto_discrete_set_t *)payload;
-        discrete_glue_set(c->apply_mask, c->values);
+        uint32_t base_channel = (uint32_t)payload[0]
+                              | ((uint32_t)payload[1] << 8)
+                              | ((uint32_t)payload[2] << 16)
+                              | ((uint32_t)payload[3] << 24);
+        uint16_t bit_count = (uint16_t)payload[4]
+                           | ((uint16_t)payload[5] << 8);
+        uint16_t bitmap_bytes = PROTO_DISCRETE_BITMAP_BYTES(bit_count);
+        uint16_t expected = (uint16_t)(PROTO_DISCRETE_SET_HEADER_SIZE
+                                    + 2u * bitmap_bytes);
+        uint64_t range_end = (uint64_t)base_channel + bit_count;
+        if(bit_count == 0 || expected != len || range_end > UINT32_MAX + 1ull){
+            status = PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT;
+        }else{
+            const uint8_t *apply = payload + PROTO_DISCRETE_SET_HEADER_SIZE;
+            const uint8_t *values = apply + bitmap_bytes;
+            uint32_t local_apply = 0;
+            uint32_t local_values = 0;
+            for(uint16_t i = 0; i < bit_count; i++){
+                uint32_t channel = base_channel + i;
+                if(channel >= 32u || (apply[i / 8u] & (1u << (i % 8u))) == 0u){
+                    continue;
+                }
+                uint32_t mask = 1u << channel;
+                local_apply |= mask;
+                if((values[i / 8u] & (1u << (i % 8u))) != 0u){
+                    local_values |= mask;
+                }
+            }
+            if(local_apply != 0u){
+                discrete_glue_set(local_apply, local_values);
+            }
+        }
     }
     if(src == COMM_SRC_TCP){
         comm_send_ack(CMD_DISCRETE_SET, req_id, status, NULL, 0);
@@ -647,6 +730,7 @@ static void comm_dispatch(uint8_t cmd, uint8_t req_id,
     if(src != COMM_SRC_TCP){
         switch(cmd){
             case CMD_GET_FW_INFO:
+            case CMD_GET_CAPABILITIES:
             case CMD_GET_HW_INFO:
             case CMD_GET_UID:
             case CMD_ARINC_CHNL_SETUP:
@@ -666,6 +750,9 @@ static void comm_dispatch(uint8_t cmd, uint8_t req_id,
         case CMD_GET_UID:           handle_get_uid();           break;
 
 #ifndef RECOVERY_BUILD
+        case CMD_GET_CAPABILITIES:
+            handle_get_capabilities(req_id, payload, len);
+            break;
         case CMD_ARINC_CHNL_SETUP:  handle_chnl_setup(req_id, payload, len);  break;
         case CMD_ARINC_CHNL_ENABLE: handle_chnl_enable(req_id, payload, len); break;
         case CMD_ARINC_SEND_LBL_MAN:

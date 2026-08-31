@@ -1,4 +1,4 @@
-# ESP32-S3 ARINC429 linecard (AES-ESP-DO32-HID) — ESP-IDF v5.5 project.
+# ESP32-S3 M31/HID linecard (AES-ESP-M31-HID) — ESP-IDF v5.5 project.
 #
 # Application build (ota_0 partition):
 #   idf.py set-target esp32s3

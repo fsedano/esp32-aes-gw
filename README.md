@@ -1,11 +1,12 @@
-# esp32-aes-gw — AES-ESP-DO32-HID linecard firmware
+# esp32-aes-gw — AES-ESP-M31-HID linecard firmware
 
 Firmware for an avionics linecard based on the **Waveshare ESP32-S3-ETH**
 module (W5500 Ethernet over SPI). It speaks the aes-gw2 wire protocol
 (SSDP discovery, TCP :5000 control, UDP :10737 stream) and advertises
-itself as **`AES-ESP-DO32-HID`** (recovery/bootloader mode: **`BL-AES-ESP-DO32-HID`**,
-`fw_type = 1`). The 32-output / 1-input discrete block is backed by an Ebyte
-M31-U over Modbus RTU. The ARINC layer remains a protocol stub: commands
+itself as the self-describing **`AES-ESP-M31-HID`** (recovery/bootloader
+mode: **`BL-AES-ESP-M31-HID`**, `fw_type = 1`). Its discrete block is backed
+by an Ebyte M31-U over Modbus RTU and reports the DI/DO population discovered
+at boot. The ARINC layer remains a protocol stub: commands
 validate, keep state and ACK like the STM32 sibling (`stm32/arinc4i4o`), but
 no ARINC pins are driven and no RX labels are produced yet.
 
@@ -27,8 +28,9 @@ Authoritative protocol spec: `aes-gw2/docs/WIRE_PROTOCOL.md`.
 The application owns UART0 on TX GPIO43 / RX GPIO44 and talks to an Ebyte
 M31-U using its factory Modbus RTU settings: unit address 1 at 9600 baud,
 8N1. Any stack exposing at least one contiguous DO coil is considered online.
-Up to 32 detected DOs map to gateway `dout.0` through `dout.31`; the first DI,
-when present, maps to `din.0`.
+The boot probe freezes up to 32 detected DOs and the first DI into the
+capability descriptor for that boot. For example, a detected 16 DO / 1 DI
+stack exposes `dout.0` through `dout.15` plus `din.0` automatically.
 
 `main/m31_modbus.c` runs all blocking UART work in a private task. It polls
 relay readback with FC01 and input state with FC02, and applies changed relay
@@ -37,10 +39,17 @@ readback, not an optimistic echo of a gateway command. Three failed polling
 cycles take the discrete link down; input validity is cleared and commands
 are dropped until polling recovers, matching `aes-gw2`'s pending/retry model.
 
+The discrete wire data plane uses the scalable range form from wire protocol
+§9: `DISCRETE_SET (0x31)` carries `base_channel`, `bit_count`, and apply/value
+bitmaps; `DISCRETE_STATE (0x32)` carries one range plus relay/input/validity
+bitmaps. This card emits one range starting at channel 0 and covering the
+larger of the detected DI/DO counts.
+
 Outputs are fail-safe off at boot, on `DISCRETE_SETUP(enable=false)`, and on
 TCP session loss. The worker keeps retrying all-off independently of Ethernet.
-Until channel counts are added to the wire protocol, commands for outputs
-beyond the detected range remain unconfirmed at the gateway.
+The gateway learns the detected range from `GET_CAPABILITIES`, so unavailable
+channels are not offered for binding. A direct wire command outside that range
+remains unconfirmed.
 `M31_DE_GPIO` defaults to `-1` for the board's auto-direction transceiver; set
 it to the DE/RE GPIO if a manually-directed transceiver is fitted.
 
@@ -77,7 +86,7 @@ idf.py set-target esp32s3
 # Application build (runs from ota_0)
 idf.py build
 
-# Recovery build (factory partition, advertises BL-AES-ESP-DO32-HID, serves FW_UPDATE)
+# Recovery build (factory partition, advertises BL-AES-ESP-M31-HID, serves FW_UPDATE)
 idf.py -B build-recovery -DSDKCONFIG=sdkconfig.recovery \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.recovery" \
        -DRECOVERY_BUILD=1 build
@@ -249,7 +258,7 @@ PY
 #    gateway's release checker (aes-gw2/fwrelease) ignores anything else.
 gh release create v0.1.2 -R fsedano/sim-lc-esp32-aes-gw \
    --target main --title v0.1.2 \
-   --notes "AES-ESP-DO32-HID firmware v0.1.2" \
+   --notes "AES-ESP-M31-HID firmware v0.1.2" \
    esp32-fw-Release-v0.1.2.bin
 ```
 
@@ -284,18 +293,26 @@ its identity from the MCU's 96-bit UID:
 - **Serial (12 hex chars)** = hex(MAC) — GET_HW_INFO + description.xml.
 - **Hostname** = `A429E-` + first 8 serial chars (DHCP option 12).
 
-## Gateway registration
+## Self-description and gateway discovery
 
-The gateway ignores unknown board_ids: `AES-ESP-DO32-HID` is registered in
-`aes-gw2/linecard/protocol/hid/products.go` (`RegisterProduct`, product
-`AES_ESP_DO32_HID`, `BoardIDs: []string{"AES-ESP-DO32-HID"}`, primary discrete
-capability `{Inputs:1, Outputs:32}` plus a HID
-`Extra{Inputs:8, Outputs:32}` group — HID convention: Inputs = axes,
-Outputs = buttons — `FwRepo: fsedano/sim-lc-esp32-aes-gw`, `MinFwVersion:
-v0.2.0`). The pre-HID product `A429_ESP_4D` (board_id `A429-ESP_4D`,
-registered in `.../discrete/products.go`) shares the same FwRepo, so
-already-deployed cards are offered this firmware and become the HID product
-after upgrading. See `aes-gw2/docs/ADDING_LINECARDS.md`.
+The application adds `X-AES-CAPS: 1` to SSDP and serves the version-1 nested
+TLV descriptor through `GET_CAPABILITIES (0x0C)`. Its display name is
+`AES ESP32 M31 discrete I/O + USB HID`, and its groups are ordered as:
+
+1. `DISCRETE`: the boot-discovered M31 DI/DO counts, relay output driver.
+2. `HID_AXIS`: 8 gateway-driven USB joystick axes.
+3. `HID_BUTTON`: 32 gateway-driven USB joystick buttons.
+
+The descriptor is immutable until reboot, as required by
+`aes-gw2/docs/CAPABILITY_DESCRIPTOR.md`. The `AES-ESP-M31-HID` board ID
+does not need a hardcoded gateway product entry: the SSDP hint admits it and
+the descriptor becomes the capability source. Recovery mode deliberately
+omits the hint and does not serve the descriptor, per the wire contract.
+Stage-1 gateway behavior does not provide automatic firmware-management
+metadata for an otherwise unknown board ID. Automatic gateway firmware
+management and recovery discovery for this new ID require trusted registry
+metadata in a later gateway update; initial deployment uses the existing
+bench/manual flashing path.
 
 ## Not implemented yet (stubs / deferred)
 

@@ -19,29 +19,43 @@
 #include <string.h>
 
 size_t ssdp_build_notify(char *buf, size_t cap, const ssdp_ident_t *id){
+    char caps[24] = "";
+    if(id->caps_version > 0){
+        snprintf(caps, sizeof(caps), "X-AES-CAPS: %u\r\n",
+                 (unsigned)id->caps_version);
+    }
     int n = snprintf(buf, cap,
         "NOTIFY * HTTP/1.1\r\n"
         "Host:239.255.255.250:1900\r\n"
         "Location:http://%s:%u/description.xml\r\n"
         "Cache-Control:max-age=10\r\n"
         "Server:%s/%s UPnP/1.0\r\n"
+        "%s"
         "USN:%s::upnp:rootdevice\r\n"
         "NT:upnp:rootdevice\r\n"
         "NTS:ssdp:alive\r\n\r\n",
-        id->ip, (unsigned)id->http_port, id->board_id, id->fw_tag, id->uuid);
+        id->ip, (unsigned)id->http_port, id->board_id, id->fw_tag,
+        caps, id->uuid);
     return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
 }
 
 size_t ssdp_build_msearch_reply(char *buf, size_t cap, const ssdp_ident_t *id){
+    char caps[24] = "";
+    if(id->caps_version > 0){
+        snprintf(caps, sizeof(caps), "X-AES-CAPS: %u\r\n",
+                 (unsigned)id->caps_version);
+    }
     int n = snprintf(buf, cap,
         "HTTP/1.1 200 OK\r\n"
         "Host:239.255.255.250:1900\r\n"
         "Location:http://%s:%u/description.xml\r\n"
         "Cache-Control:max-age=10\r\n"
         "Server:%s/%s UPnP/1.0\r\n"
+        "%s"
         "USN:%s::upnp:rootdevice\r\n"
         "ST:upnp:rootdevice\r\n\r\n",
-        id->ip, (unsigned)id->http_port, id->board_id, id->fw_tag, id->uuid);
+        id->ip, (unsigned)id->http_port, id->board_id, id->fw_tag,
+        caps, id->uuid);
     return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
 }
 

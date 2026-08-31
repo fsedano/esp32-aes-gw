@@ -28,6 +28,7 @@ typedef struct {
     const char *fw_tag;      /* version string after the '/'           */
     const char *serial;      /* description.xml <serialNumber>         */
     uint16_t    http_port;   /* description.xml port (80 on target)    */
+    uint8_t     caps_version;/* X-AES-CAPS value; 0 omits the header   */
 } ssdp_ident_t;
 
 /* NOTIFY ssdp:alive (multicast). Returns bytes written (no NUL), 0 if cap

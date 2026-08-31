@@ -10,6 +10,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/gen_version.cmake)
 idf_component_register(
     SRCS
         "comm_core.c"
+        "capabilities.c"
         "identity.c"
         "fletcher32.c"
         "lc_log.c"

@@ -17,6 +17,7 @@
 
 #define DISCRETE_DEFAULT_REPORT_MS  500u
 #define DISCRETE_DISABLE_TIMEOUT_MS 2000u
+#define DISCRETE_LOCAL_MAX_CHANNELS 32u
 
 typedef struct {
     bool     enabled;
@@ -33,10 +34,19 @@ typedef struct {
 
 static discrete_t g_disc;
 static const discrete_backend_ops_t *g_backend;
+static uint16_t g_input_count;
+static uint16_t g_output_count;
 
 void discrete_glue_bind(const discrete_backend_ops_t *ops){
     g_backend = ops;
     g_disc.hw_seen = false;
+}
+
+void discrete_glue_configure(uint16_t input_count, uint16_t output_count){
+    g_input_count = input_count > DISCRETE_LOCAL_MAX_CHANNELS
+                  ? DISCRETE_LOCAL_MAX_CHANNELS : input_count;
+    g_output_count = output_count > DISCRETE_LOCAL_MAX_CHANNELS
+                   ? DISCRETE_LOCAL_MAX_CHANNELS : output_count;
 }
 
 /* Pull a lock-bounded snapshot from the platform worker. No UART work is
@@ -66,13 +76,37 @@ static void refresh_hardware(void){
 }
 
 static void emit_state(void){
-    proto_discrete_state_t st;
-    st.relay_state = g_disc.hw.relay_state;
-    st.input_state = g_disc.hw.input_state;
-    st.input_valid = g_disc.hw.input_valid;
-    st.link        = g_disc.hw.link ? 1u : 0u;
-    st.seq         = g_disc.seq;
-    if(comm_core_send_udp(CMD_DISCRETE_STATE, (const uint8_t *)&st, sizeof(st))){
+    uint16_t bit_count = g_input_count > g_output_count
+                       ? g_input_count : g_output_count;
+    if(bit_count == 0){
+        g_disc.state_pending = false;
+        g_disc.last_state_ms = lc_port_tick_ms();
+        return;
+    }
+
+    uint16_t bitmap_bytes = PROTO_DISCRETE_BITMAP_BYTES(bit_count);
+    uint8_t payload[PROTO_DISCRETE_STATE_HEADER_SIZE + 3u * sizeof(uint32_t)] = {0};
+    payload[4] = (uint8_t)bit_count;
+    payload[5] = (uint8_t)(bit_count >> 8);
+    payload[6] = g_disc.hw.link ? 1u : 0u;
+    payload[7] = g_disc.seq;
+
+    const uint32_t maps[3] = {
+        g_disc.hw.relay_state,
+        g_disc.hw.input_state,
+        g_disc.hw.input_valid,
+    };
+    for(uint16_t map = 0; map < 3u; map++){
+        for(uint16_t byte = 0; byte < bitmap_bytes; byte++){
+            payload[PROTO_DISCRETE_STATE_HEADER_SIZE
+                    + map * bitmap_bytes + byte] =
+                (uint8_t)(maps[map] >> (8u * byte));
+        }
+    }
+
+    uint8_t payload_len = (uint8_t)(PROTO_DISCRETE_STATE_HEADER_SIZE
+                                  + 3u * bitmap_bytes);
+    if(comm_core_send_udp(CMD_DISCRETE_STATE, payload, payload_len)){
         g_disc.seq++;
         g_disc.state_pending = false;
         g_disc.last_state_ms = lc_port_tick_ms();
@@ -142,6 +176,16 @@ uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms){
 
 void discrete_glue_set(uint32_t apply_mask, uint32_t values){
     if(!g_disc.enabled || g_disc.disabling){
+        return;
+    }
+    uint32_t valid_outputs = UINT32_MAX;
+    if(g_output_count < 32u){
+        valid_outputs = g_output_count == 0u
+                      ? 0u : (1u << g_output_count) - 1u;
+    }
+    apply_mask &= valid_outputs;
+    values &= valid_outputs;
+    if(apply_mask == 0u){
         return;
     }
     refresh_hardware();

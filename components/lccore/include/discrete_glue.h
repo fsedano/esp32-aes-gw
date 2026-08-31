@@ -35,6 +35,11 @@ typedef struct {
 /* Bind the platform backend. The ops table must remain valid forever. */
 void discrete_glue_bind(const discrete_backend_ops_t *ops);
 
+/* Set the immutable per-boot process-image widths advertised by the
+   capability descriptor. The current M31 backend supports at most 32 of
+   either direction. STATE reports one range covering the larger width. */
+void discrete_glue_configure(uint16_t input_count, uint16_t output_count);
+
 /* One-time init. */
 void discrete_glue_init(void);
 
@@ -46,8 +51,8 @@ void discrete_glue_reset(void);
    wire status code. */
 uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms);
 
-/* CMD_DISCRETE_SET: merge desired relay bits (apply_mask/values). Writes are
-   silently dropped while disabled or while the backend link is down. */
+/* Apply a range-decoded local M31 relay mask. Writes are silently
+   dropped while disabled or while the backend link is down. */
 void discrete_glue_set(uint32_t apply_mask, uint32_t values);
 
 /* Periodic service (comm task): emit pending / heartbeat STATE frames via

@@ -85,7 +85,7 @@ static const uint8_t s_hid_report_desc[] = {
    Windows caches the joy.cpl name (registry OEMName) keyed by VID&PID and
    never re-reads the product string for a PID it has seen, so a rename of
    an existing PID keeps showing the old name. 0x8110 was the pre-rename
-   "A429-ESP_4DH Joystick"; 0x8111 is "AES-ESP-DO32-HID Joystick". */
+   "A429-ESP_4DH Joystick"; 0x8111 is the AES ESP M31 HID joystick. */
 #define HID_USB_VID     0x303A
 #define HID_USB_PID     0x8111
 
@@ -125,9 +125,9 @@ static const uint8_t s_desc_configuration[] = {
 static const char *s_string_desc[] = {
     (const char[]){ 0x09, 0x04 },       /* 0: language = English (US)  */
     "fsedano",                          /* 1: manufacturer             */
-    "AES-ESP-DO32-HID Joystick",            /* 2: product                  */
+    "AES-ESP-M31-HID Joystick",             /* 2: product                  */
     "000000000000",                     /* 3: serial (placeholder)     */
-    "AES-ESP-DO32-HID HID",                 /* 4: HID interface            */
+    "AES-ESP-M31-HID HID",                  /* 4: HID interface            */
 };
 
 /* ---------------------------------------------------------------------- */
