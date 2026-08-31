@@ -236,8 +236,9 @@ static void handle_get_capabilities(uint8_t req_id, const uint8_t *payload,
     if(chunk_len > CAPS_CHUNK_MAX){
         chunk_len = CAPS_CHUNK_MAX;
     }
-    LOG_INF("caps: serving v%u offset %u/%u, chunk %u",
-            version, offset, total_len, chunk_len);
+    if(offset == 0u){
+        capabilities_log_summary();
+    }
     uint8_t extra[2u + CAPS_CHUNK_MAX];
     extra[0] = (uint8_t)total_len;
     extra[1] = (uint8_t)(total_len >> 8);

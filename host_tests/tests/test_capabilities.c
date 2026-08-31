@@ -3,6 +3,8 @@
 #include "capabilities.h"
 #include "comm_capture.h"
 #include "comm_core.h"
+#include "lc_log.h"
+#include "lc_port.h"
 #include "proto.h"
 #include "test_util.h"
 
@@ -65,6 +67,8 @@ int main(void){
             'U','S','B',' ','H','I','D',' ','b','u','t','t','o','n','s',
     };
 
+    lc_port_init();
+    lc_log_init();
     capabilities_init(1, 16);
     CHECK(capabilities_available());
     CHECK_EQ_U32(capabilities_version(), 1);
@@ -86,6 +90,16 @@ int main(void){
     CHECK_EQ_U32(reply_len, 5u + 2u + sizeof(expected));
     CHECK_EQ_U32((uint16_t)ack[5] | ((uint16_t)ack[6] << 8), sizeof(expected));
     CHECK_MEM(ack + 7, expected, sizeof(expected));
+
+    static const char summary[] =
+        "caps: v1 173 bytes; discrete 1 DI/16 DO relay; HID 8 axes/32 buttons";
+    uint8_t log_payload[PROTO_MAX_PAYLOAD];
+    uint8_t log_len = lc_log_net_build_packet(log_payload,
+                                               sizeof(log_payload));
+    CHECK_EQ_U32(log_len, 4u + 6u + sizeof(summary) - 1u);
+    CHECK_EQ_U32(log_payload[4], LOG_LEVEL_INFO);
+    CHECK_EQ_U32(log_payload[9], sizeof(summary) - 1u);
+    CHECK_MEM(log_payload + 10, summary, sizeof(summary) - 1u);
 
     /* offset == total is legal and returns an empty chunk. */
     req[1] = (uint8_t)blob_len; req[2] = (uint8_t)(blob_len >> 8);

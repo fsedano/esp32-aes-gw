@@ -32,7 +32,6 @@
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
-#include "proto.h"
 #include "ssdp_task.h"
 
 static const char *TAG = "app_main";
@@ -55,12 +54,6 @@ void app_main(void){
     uint16_t discrete_outputs = m31_modbus_output_count();
     discrete_glue_configure(discrete_inputs, discrete_outputs);
     capabilities_init(discrete_inputs, discrete_outputs);
-    uint16_t descriptor_len = 0;
-    (void)capabilities_blob(&descriptor_len);
-    LOG_INF("caps: v%u %u bytes; discrete %u DI/%u DO relay; HID %u axes/%u buttons",
-            capabilities_version(), descriptor_len,
-            discrete_inputs, discrete_outputs,
-            HID_NUM_AXES, HID_NUM_BUTTONS);
 #endif
 
     /* Identity: everything (UID, UUID, serial, hostname) derives from the

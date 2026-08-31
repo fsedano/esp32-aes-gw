@@ -8,6 +8,7 @@
 #include "capabilities.h"
 
 #include "board_id.h"
+#include "lc_log.h"
 #include "proto.h"
 
 #include <stddef.h>
@@ -51,6 +52,8 @@ typedef struct {
 
 static uint8_t s_blob[CAPS_BLOB_MAX];
 static uint16_t s_blob_len;
+static uint16_t s_discrete_inputs;
+static uint16_t s_discrete_outputs;
 static bool s_available;
 
 #ifndef RECOVERY_BUILD
@@ -127,6 +130,8 @@ static void begin_group(caps_builder_t *b, uint8_t kind,
 void capabilities_init(uint16_t discrete_inputs, uint16_t discrete_outputs){
     s_available = false;
     s_blob_len = 0;
+    s_discrete_inputs = 0;
+    s_discrete_outputs = 0;
 
 #ifdef RECOVERY_BUILD
     (void)discrete_inputs;
@@ -172,6 +177,8 @@ void capabilities_init(uint16_t discrete_inputs, uint16_t discrete_outputs){
     }
     memcpy(s_blob, b.data, b.len);
     s_blob_len = b.len;
+    s_discrete_inputs = discrete_inputs;
+    s_discrete_outputs = discrete_outputs;
     s_available = true;
 #endif
 }
@@ -189,4 +196,14 @@ const uint8_t *capabilities_blob(uint16_t *len){
         *len = s_available ? s_blob_len : 0u;
     }
     return s_available ? s_blob : NULL;
+}
+
+void capabilities_log_summary(void){
+    if(!s_available){
+        return;
+    }
+    LOG_INF("caps: v%u %u bytes; discrete %u DI/%u DO relay; HID %u axes/%u buttons",
+            CAPS_DESC_VERSION, s_blob_len,
+            s_discrete_inputs, s_discrete_outputs,
+            HID_NUM_AXES, HID_NUM_BUTTONS);
 }

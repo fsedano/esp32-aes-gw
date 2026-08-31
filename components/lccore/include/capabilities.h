@@ -31,6 +31,9 @@ uint8_t capabilities_version(void);
 /* Immutable blob pointer; writes its byte length when len is non-NULL. */
 const uint8_t *capabilities_blob(uint16_t *len);
 
+/* Log the descriptor inventory in a human-readable wire-log entry. */
+void capabilities_log_summary(void);
+
 #ifdef __cplusplus
 }
 #endif
