@@ -26,6 +26,7 @@
 #include "hid_port.h"
 #include "identity.h"
 #include "ota_ops.h"
+#include "rs485_test.h"
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
@@ -43,6 +44,9 @@ void app_main(void){
     lc_port_init();
     lc_log_init();
 
+    /* Temporary bring-up pattern for the external RS-485/discrete-I/O bus. */
+    rs485_test_init();
+
     /* Identity: everything (UID, UUID, serial, hostname) derives from the
        eFuse-based Ethernet MAC, which is also programmed into the W5500. */
     uint8_t mac[6];
@@ -59,8 +63,9 @@ void app_main(void){
 
 #ifndef RECOVERY_BUILD
     /* USB HID joystick: claims the OTG PHY, so the USB-Serial-JTAG console
-       on the USB-C port stops here (logs stay on UART0). Needs identity for
-       the USB serial string, hence after identity_init. */
+       on the USB-C port stops here. Runtime logs use the Ethernet wire
+       protocol and UART0 is reserved for RS-485. Needs identity for the USB
+       serial string, hence after identity_init. */
     hid_port_init();
 #endif
 

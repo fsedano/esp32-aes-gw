@@ -15,10 +15,25 @@ values over the wire protocol (`HID_SETUP 0x33` / `HID_SET 0x34` /
 `HID_STATE 0x35`, wire doc §12) and a Windows PC on the USB port sees a
 standard DirectInput joystick. Consequence: the USB-Serial-JTAG console on
 that port only exists in the **recovery** build — the application claims
-the OTG PHY at boot and logs go to UART0. Firmware updates are OTA over
-ethernet; ROM download mode (hold BOOT) remains the bench fallback.
+the OTG PHY at boot. Runtime logs go to the gateway over Ethernet; UART0
+(TX GPIO43, RX GPIO44) is reserved for the external RS-485 bus. Firmware
+updates are OTA over Ethernet; ROM download mode (hold BOOT) remains the
+bench fallback.
 
 Authoritative protocol spec: `aes-gw2/docs/WIRE_PROTOCOL.md`.
+
+## UART / RS-485 cabling test
+
+The current bring-up firmware owns UART0 on TX GPIO43 / RX GPIO44 and sends
+the following 16-byte pattern every 500 ms at 115200 baud, 8N1:
+
+```text
+55 AA 00 FF 52 53 34 38 35 2D 54 45 53 54 0D 0A
+```
+
+The ASCII tail is `RS485-TEST\r\n`. `RS485_TEST_DE_GPIO` in
+`main/rs485_test.c` defaults to `-1` for an auto-direction RS-485 adapter;
+set it to the transceiver DE/RE GPIO when manual direction control is needed.
 
 ## Layout
 

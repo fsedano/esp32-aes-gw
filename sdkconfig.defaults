@@ -21,11 +21,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # 1 ms tick for the protocol timing services.
 CONFIG_FREERTOS_HZ=1000
 
-# The USB-C port is a TinyUSB HID joystick in the application build, which
-# claims the ESP32-S3's single internal USB PHY: the USB-Serial-JTAG
-# secondary console on that port would die at tinyusb_driver_install()
-# anyway, so drop it cleanly (logs stay on UART0). The recovery build
-# overrides this back and never installs TinyUSB.
+# Runtime logs are carried by the AES gateway wire protocol over Ethernet.
+# Keep the primary console disabled so UART0 (TX GPIO43, RX GPIO44) belongs
+# exclusively to the external RS-485 bus. The application also disables the
+# USB-Serial-JTAG secondary console because TinyUSB HID owns the USB PHY.
+CONFIG_ESP_CONSOLE_NONE=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # esp_tinyusb: one HID interface, no CDC/MSC.

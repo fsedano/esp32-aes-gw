@@ -5,6 +5,7 @@ set(srcs
     "ssdp_task.c"
     "comm_task.c"
     "ota_ops.c"
+    "rs485_test.c"
     "find_me.c"
     "fwup_port.c"       # body compiles empty unless RECOVERY_BUILD
 )
@@ -26,6 +27,7 @@ idf_component_register(
         esp_timer
         esp_driver_spi
         esp_driver_gpio
+        esp_driver_uart
         nvs_flash
         app_update
         mbedtls
