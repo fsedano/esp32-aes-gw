@@ -4,10 +4,10 @@ Firmware for an avionics linecard based on the **Waveshare ESP32-S3-ETH**
 module (W5500 Ethernet over SPI). It speaks the aes-gw2 wire protocol
 (SSDP discovery, TCP :5000 control, UDP :10737 stream) and advertises
 itself as **`AES-ESP-DO32-HID`** (recovery/bootloader mode: **`BL-AES-ESP-DO32-HID`**,
-`fw_type = 1`). The ARINC and discrete pin-driving layers are stubs: all
-commands validate, keep state and ACK exactly like the STM32 sibling
-(`stm32/arinc4i4o`), but no pins are driven and no RX labels are produced
-yet.
+`fw_type = 1`). The 32-output / 1-input discrete block is backed by an Ebyte
+M31-U over Modbus RTU. The ARINC layer remains a protocol stub: commands
+validate, keep state and ACK like the STM32 sibling (`stm32/arinc4i4o`), but
+no ARINC pins are driven and no RX labels are produced yet.
 
 The card's USB-C port is a **USB HID joystick** (8 × 16-bit axes + 32
 buttons, TinyUSB) in the application build: the gateway drives axis/button
@@ -22,30 +22,40 @@ bench fallback.
 
 Authoritative protocol spec: `aes-gw2/docs/WIRE_PROTOCOL.md`.
 
-## UART / RS-485 cabling test
+## UART / RS-485 M31-U discrete I/O
 
-The current bring-up firmware owns UART0 on TX GPIO43 / RX GPIO44 and sends
-the following 16-byte pattern every 500 ms at 115200 baud, 8N1:
+The application owns UART0 on TX GPIO43 / RX GPIO44 and talks to an Ebyte
+M31-U using its factory Modbus RTU settings: unit address 1 at 9600 baud,
+8N1. Any stack exposing at least one contiguous DO coil is considered online.
+Up to 32 detected DOs map to gateway `dout.0` through `dout.31`; the first DI,
+when present, maps to `din.0`.
 
-```text
-55 AA 00 FF 52 53 34 38 35 2D 54 45 53 54 0D 0A
-```
+`main/m31_modbus.c` runs all blocking UART work in a private task. It polls
+relay readback with FC01 and input state with FC02, and applies changed relay
+bits with FC05. `DISCRETE_STATE.relay_state` is therefore physical FC01
+readback, not an optimistic echo of a gateway command. Three failed polling
+cycles take the discrete link down; input validity is cleared and commands
+are dropped until polling recovers, matching `aes-gw2`'s pending/retry model.
 
-The ASCII tail is `RS485-TEST\r\n`. `RS485_TEST_DE_GPIO` in
-`main/rs485_test.c` defaults to `-1` for an auto-direction RS-485 adapter;
-set it to the transceiver DE/RE GPIO when manual direction control is needed.
+Outputs are fail-safe off at boot, on `DISCRETE_SETUP(enable=false)`, and on
+TCP session loss. The worker keeps retrying all-off independently of Ethernet.
+Until channel counts are added to the wire protocol, commands for outputs
+beyond the detected range remain unconfirmed at the gateway.
+`M31_DE_GPIO` defaults to `-1` for the board's auto-direction transceiver; set
+it to the DE/RE GPIO if a manually-directed transceiver is fitted.
 
 ## Layout
 
 ```
 components/lccore/   protocol core: framing/dispatch (comm_core), identity
                      (from the eFuse MAC), SSDP builders, log ring,
-                     Fletcher32, FW_UPDATE state machine, glue stubs.
+                     Fletcher32, FW_UPDATE state machine, hardware seams.
                      Plain C11, no ESP-IDF includes (lc_port.h seam) — the
                      same sources compile on the host for unit tests.
 main/                ESP-IDF app: W5500 + esp_netif/DHCP, SSDP + UPnP
                      description.xml tasks, TCP/UDP transport, OTA plumbing,
-                     recovery-build esp_ota+mbedtls FW_UPDATE port.
+                     M31-U Modbus RTU worker, recovery-build esp_ota+mbedtls
+                     FW_UPDATE port.
 host_tests/          plain cmake+ctest unit tests (no ESP-IDF needed).
 tools/fwpack.py      pack an app .bin into the aes-gw2 OTA image container.
 partitions.csv       8 MB: nvs | otadata | phy | factory (recovery, 1 MB)
@@ -179,6 +189,32 @@ same format `aes-gw2/fwupdate/pack.go` reads.
 
 Prerequisite (one-time): `pip install cryptography`.
 
+For the usual build/pack/publish flow, use the helper script. It infers the
+release tag from the firmware version, verifies the encrypted container, and
+publishes it to the configured `FwRepo`:
+
+```sh
+# Clean exact-tag release
+tools/release.sh
+
+# Temporary bench release containing tracked working-tree changes. Dirty
+# builds are published as GitHub prereleases; an explicit tag is optional.
+tools/release.sh --allow-dirty
+tools/release.sh --allow-dirty v0.2.3-test.1
+
+# Exercise everything except GitHub publication.
+tools/release.sh --allow-dirty --dry-run
+```
+
+The selected release tag is embedded in both the AES `GET_FW_INFO` response
+and the ESP-IDF application descriptor, so the version shown by aes-gw2
+matches the release. Tags are limited to 24 characters by the wire field;
+long Git-derived dirty versions are shortened automatically. If repeated
+dirty builds share the same commit, pass a fresh explicit tag. Environment
+variables `FW_RELEASE_REPO`, `FW_RELEASE_TARGET`, `FW_RELEASE_BUILD_DIR`, and
+`IDF_EXPORT` override the defaults; release builds use the isolated
+`build-release/` directory. The equivalent manual procedure follows.
+
 ```sh
 # 1. Tag the release commit. Use an exact, clean tag: gen_version.cmake then
 #    stamps a bare "vX.Y.Z" — a dev/dirty suffix (v0.1.1-dev.N.g<sha>) is
@@ -252,8 +288,8 @@ its identity from the MCU's 96-bit UID:
 
 The gateway ignores unknown board_ids: `AES-ESP-DO32-HID` is registered in
 `aes-gw2/linecard/protocol/hid/products.go` (`RegisterProduct`, product
-`AES_ESP_DO32_HID`, `BoardIDs: []string{"AES-ESP-DO32-HID"}`, capabilities: ARINC
-4 in / 4 out plus a discrete `Extra{Inputs:1, Outputs:32}` group plus a HID
+`AES_ESP_DO32_HID`, `BoardIDs: []string{"AES-ESP-DO32-HID"}`, primary discrete
+capability `{Inputs:1, Outputs:32}` plus a HID
 `Extra{Inputs:8, Outputs:32}` group — HID convention: Inputs = axes,
 Outputs = buttons — `FwRepo: fsedano/sim-lc-esp32-aes-gw`, `MinFwVersion:
 v0.2.0`). The pre-HID product `A429_ESP_4D` (board_id `A429-ESP_4D`,
@@ -268,5 +304,3 @@ after upgrading. See `aes-gw2/docs/ADDING_LINECARDS.md`.
   driven.
 - Timetable bulk reads (0x15/0x17): ERROR ACK, same as the STM32 firmware.
 - DEVICE_STATUS counters are all-zero (matches the gateway's fakelc).
-- Discrete inputs: one input is reported present and valid but its state is
-  a constant 0 (no pin is read yet).

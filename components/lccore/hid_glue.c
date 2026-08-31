@@ -122,9 +122,9 @@ void hid_glue_set(uint8_t axis_mask, const int16_t axes[HID_NUM_AXES],
         changed = true;
     }
     if(changed){
-        /* The latch cannot fail: writes confirm immediately, like the
-           discrete stub. usb_mounted carries the truth about whether a PC
-           is actually reading the report. */
+        /* The local HID latch cannot fail: writes confirm immediately.
+           usb_mounted carries the truth about whether a PC is actually
+           reading the report. */
         submit_current();
         g_hid.state_pending = true;
     }

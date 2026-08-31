@@ -5,7 +5,7 @@ set(srcs
     "ssdp_task.c"
     "comm_task.c"
     "ota_ops.c"
-    "rs485_test.c"
+    "m31_modbus.c"
     "find_me.c"
     "fwup_port.c"       # body compiles empty unless RECOVERY_BUILD
 )

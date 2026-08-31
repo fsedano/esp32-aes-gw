@@ -26,7 +26,7 @@
 #include "hid_port.h"
 #include "identity.h"
 #include "ota_ops.h"
-#include "rs485_test.h"
+#include "m31_modbus.h"
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
@@ -44,8 +44,11 @@ void app_main(void){
     lc_port_init();
     lc_log_init();
 
-    /* Temporary bring-up pattern for the external RS-485/discrete-I/O bus. */
-    rs485_test_init();
+    /* M31-U discrete I/O over Modbus RTU. Its worker owns UART0 and binds
+       the nonblocking backend consumed by the Ethernet wire protocol. */
+#ifndef RECOVERY_BUILD
+    m31_modbus_init();
+#endif
 
     /* Identity: everything (UID, UUID, serial, hostname) derives from the
        eFuse-based Ethernet MAC, which is also programmed into the W5500. */
