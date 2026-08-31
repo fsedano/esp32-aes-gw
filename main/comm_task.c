@@ -78,7 +78,9 @@ static struct sockaddr_in s_host_addr;
 static bool               s_host_known;
 
 static uint32_t s_last_log_flush;
+#ifndef RECOVERY_BUILD
 static uint32_t s_last_status;
+#endif
 
 /* ====================================================================== */
 /* comm_core ops                                                          */
