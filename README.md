@@ -1,13 +1,22 @@
-# esp32-aes-gw — A429-ESP_4D linecard firmware
+# esp32-aes-gw — AES-ESP-DO32-HID linecard firmware
 
 Firmware for an avionics linecard based on the **Waveshare ESP32-S3-ETH**
 module (W5500 Ethernet over SPI). It speaks the aes-gw2 wire protocol
 (SSDP discovery, TCP :5000 control, UDP :10737 stream) and advertises
-itself as **`A429-ESP_4D`** (recovery/bootloader mode: **`BL-A429-ESP_4D`**,
+itself as **`AES-ESP-DO32-HID`** (recovery/bootloader mode: **`BL-AES-ESP-DO32-HID`**,
 `fw_type = 1`). The ARINC and discrete pin-driving layers are stubs: all
 commands validate, keep state and ACK exactly like the STM32 sibling
 (`stm32/arinc4i4o`), but no pins are driven and no RX labels are produced
 yet.
+
+The card's USB-C port is a **USB HID joystick** (8 × 16-bit axes + 32
+buttons, TinyUSB) in the application build: the gateway drives axis/button
+values over the wire protocol (`HID_SETUP 0x33` / `HID_SET 0x34` /
+`HID_STATE 0x35`, wire doc §12) and a Windows PC on the USB port sees a
+standard DirectInput joystick. Consequence: the USB-Serial-JTAG console on
+that port only exists in the **recovery** build — the application claims
+the OTG PHY at boot and logs go to UART0. Firmware updates are OTA over
+ethernet; ROM download mode (hold BOOT) remains the bench fallback.
 
 Authoritative protocol spec: `aes-gw2/docs/WIRE_PROTOCOL.md`.
 
@@ -43,7 +52,7 @@ idf.py set-target esp32s3
 # Application build (runs from ota_0)
 idf.py build
 
-# Recovery build (factory partition, advertises BL-A429-ESP_4D, serves FW_UPDATE)
+# Recovery build (factory partition, advertises BL-AES-ESP-DO32-HID, serves FW_UPDATE)
 idf.py -B build-recovery -DSDKCONFIG=sdkconfig.recovery \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.recovery" \
        -DRECOVERY_BUILD=1 build
@@ -150,7 +159,7 @@ PY
 #    gateway's release checker (aes-gw2/fwrelease) ignores anything else.
 gh release create v0.1.2 -R fsedano/sim-lc-esp32-aes-gw \
    --target main --title v0.1.2 \
-   --notes "A429-ESP_4D firmware v0.1.2" \
+   --notes "AES-ESP-DO32-HID firmware v0.1.2" \
    esp32-fw-Release-v0.1.2.bin
 ```
 
@@ -187,12 +196,16 @@ its identity from the MCU's 96-bit UID:
 
 ## Gateway registration
 
-The gateway ignores unknown board_ids: `A429-ESP_4D` is registered in
-`aes-gw2/linecard/protocol/discrete/products.go` (`RegisterProduct`,
-product `A429_ESP_4D`, `BoardIDs: []string{"A429-ESP_4D"}`, capabilities
-mirroring A429-8BD: ARINC 4 in / 4 out plus a discrete
-`Extra{Inputs:1, Outputs:32}` group, `FwRepo: fsedano/sim-lc-esp32-aes-gw`,
-`MinFwVersion: v0.1.0`). See `aes-gw2/docs/ADDING_LINECARDS.md`.
+The gateway ignores unknown board_ids: `AES-ESP-DO32-HID` is registered in
+`aes-gw2/linecard/protocol/hid/products.go` (`RegisterProduct`, product
+`AES_ESP_DO32_HID`, `BoardIDs: []string{"AES-ESP-DO32-HID"}`, capabilities: ARINC
+4 in / 4 out plus a discrete `Extra{Inputs:1, Outputs:32}` group plus a HID
+`Extra{Inputs:8, Outputs:32}` group — HID convention: Inputs = axes,
+Outputs = buttons — `FwRepo: fsedano/sim-lc-esp32-aes-gw`, `MinFwVersion:
+v0.2.0`). The pre-HID product `A429_ESP_4D` (board_id `A429-ESP_4D`,
+registered in `.../discrete/products.go`) shares the same FwRepo, so
+already-deployed cards are offered this firmware and become the HID product
+after upgrading. See `aes-gw2/docs/ADDING_LINECARDS.md`.
 
 ## Not implemented yet (stubs / deferred)
 

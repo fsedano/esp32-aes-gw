@@ -16,6 +16,7 @@ idf_component_register(
         "ssdp_msg.c"
         "arinc_glue.c"
         "discrete_glue.c"
+        "hid_glue.c"
         "fwupdate_core.c"
     INCLUDE_DIRS "include"
 )

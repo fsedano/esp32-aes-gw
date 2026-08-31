@@ -23,6 +23,7 @@
 #include "comm_task.h"
 #include "find_me.h"
 #include "fwup_port.h"
+#include "hid_port.h"
 #include "identity.h"
 #include "ota_ops.h"
 #include "lc_log.h"
@@ -55,6 +56,13 @@ void app_main(void){
     LOG_INF("FRAN was here; serial=%s hostname=%s", identity_serial(), identity_hostname());
     LOG_INF("boot: %s %s uuid %s", BOARD_INFO_SHORT_ID, BOARD_INFO_FW_TAG,
             identity_uuid());
+
+#ifndef RECOVERY_BUILD
+    /* USB HID joystick: claims the OTG PHY, so the USB-Serial-JTAG console
+       on the USB-C port stops here (logs stay on UART0). Needs identity for
+       the USB serial string, hence after identity_init. */
+    hid_port_init();
+#endif
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_netif_init());

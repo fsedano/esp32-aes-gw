@@ -23,9 +23,11 @@ set(LCCORE_SOURCES
     ${LCCORE}/ssdp_msg.c
     ${LCCORE}/arinc_glue.c
     ${LCCORE}/discrete_glue.c
+    ${LCCORE}/hid_glue.c
     ${LCCORE}/fwupdate_core.c
     support/host_port.c
     support/comm_capture.c
+    support/hid_port_stub.c
 )
 
 add_library(lccore STATIC ${LCCORE_SOURCES})
@@ -53,7 +55,7 @@ target_compile_definitions(lccore_recovery PUBLIC
     VERSION_COMMIT="deadbeef"
 )
 
-foreach(t framing ack_info discrete fletcher32 identity ssdp log_ring fwupdate)
+foreach(t framing ack_info discrete hid fletcher32 identity ssdp log_ring fwupdate)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE lccore)
     add_test(NAME ${t} COMMAND test_${t})
