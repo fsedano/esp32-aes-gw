@@ -619,7 +619,12 @@ static void handle_hid_set(uint8_t req_id, const uint8_t *payload,
     }else{
         proto_hid_set_t c;                      /* payload may be unaligned */
         memcpy(&c, payload, sizeof(c));
-        hid_glue_set(c.axis_mask, c.axes, c.btn_apply_mask, c.btn_values);
+        /* c is packed, so c.axes sits at an odd offset — copy into an
+           aligned array before handing out an int16_t* (Xtensa faults on
+           misaligned 16-bit loads). */
+        int16_t axes[HID_NUM_AXES];
+        memcpy(axes, c.axes, sizeof(axes));
+        hid_glue_set(c.axis_mask, axes, c.btn_apply_mask, c.btn_values);
     }
     if(src == COMM_SRC_TCP){
         comm_send_ack(CMD_HID_SET, req_id, status, NULL, 0);

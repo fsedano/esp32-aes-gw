@@ -12,7 +12,8 @@
   *          The latched report + dirty flag live under a portMUX spinlock;
   *          tud_hid_report() is only ever called from the comm task, which
   *          is the one-sender pattern TinyUSB's FreeRTOS OSAL supports.
-  *          Mount/suspend flags are single volatile bools (word-atomic).
+  *          Mount/suspend state is read straight from TinyUSB
+  *          (tud_mounted/tud_suspended) instead of being shadowed here.
   ******************************************************************************
   */
 
@@ -43,8 +44,6 @@ _Static_assert(sizeof(hid_report_t) == 20, "HID report layout");
 static portMUX_TYPE  s_mux = portMUX_INITIALIZER_UNLOCKED;
 static hid_report_t  s_report;      /* latched desired report          */
 static bool          s_dirty;       /* report differs from last sent   */
-static volatile bool s_mounted;     /* tud_mount/umount edge           */
-static volatile bool s_suspended;   /* tud_suspend/resume edge         */
 
 /* ---------------------------------------------------------------------- */
 /* Descriptors                                                            */
@@ -151,7 +150,11 @@ void hid_port_init(void){
 }
 
 bool hid_port_mounted(void){
-    return s_mounted && !s_suspended;
+    /* Read TinyUSB's own state rather than shadowing it in callbacks: a
+       suspend -> disconnect -> re-enumeration sequence emits no resume
+       callback, so a shadow suspended flag would stick and report a
+       permanent USB fault to the gateway. */
+    return tud_mounted() && !tud_suspended();
 }
 
 void hid_port_submit(const int16_t axes[HID_NUM_AXES], uint32_t buttons){
@@ -211,24 +214,13 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 }
 
 void tud_mount_cb(void){
-    s_mounted = true;
     /* A freshly enumerated host gets the current latched state. */
     portENTER_CRITICAL(&s_mux);
     s_dirty = true;
     portEXIT_CRITICAL(&s_mux);
 }
 
-void tud_umount_cb(void){
-    s_mounted = false;
-}
-
-void tud_suspend_cb(bool remote_wakeup_en){
-    (void)remote_wakeup_en;
-    s_suspended = true;
-}
-
 void tud_resume_cb(void){
-    s_suspended = false;
     portENTER_CRITICAL(&s_mux);
     s_dirty = true;
     portEXIT_CRITICAL(&s_mux);
