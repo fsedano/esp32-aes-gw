@@ -73,6 +73,43 @@ idf.py -B build-recovery -DSDKCONFIG=sdkconfig.recovery \
        -DRECOVERY_BUILD=1 build
 ```
 
+### Regenerate an application binary from an exact Git tag
+
+The application version is derived from Git when CMake configures the build.
+To produce a binary whose embedded version is exactly the release tag, `HEAD`
+must point at that tag and there must be no staged or unstaged changes to
+tracked files. Finish and commit all release changes before tagging:
+
+```sh
+release_tag=v0.2.2a0
+
+# Create a new release tag. If this local tag already exists but has never
+# been pushed or released, retarget it with: git tag -f "$release_tag" HEAD
+git tag "$release_tag" HEAD
+
+git describe --tags --abbrev=0 --exact-match HEAD  # must print $release_tag
+git status --short --untracked-files=no            # must print nothing
+```
+
+Do not move a tag that has already been pushed or published; create a new
+version tag instead. Force CMake to regenerate the version metadata, then
+build the application:
+
+```sh
+. ~/esp/esp-idf/export.sh
+idf.py reconfigure build
+
+# Verify the metadata embedded in the generated application image.
+python -m esptool image_info --version 2 build/esp32-aes-gw.bin \
+    | grep -E 'Project name|App version'
+```
+
+The check must report `App version: v0.2.2a0` (or the value assigned to
+`release_tag`). The regenerated application image is
+`build/esp32-aes-gw.bin`. Use `reconfigure build`, rather than only `build`,
+after creating or moving a tag so a cached CMake configuration cannot retain
+the previous version.
+
 ## Flash
 
 The build system's default `flash` target writes the app to the *factory*
@@ -151,10 +188,12 @@ git tag v0.1.2
 git describe --tags        # must print "v0.1.2", not "v0.1.2-1-g…"
 
 # 2. Build the application image (this is what runs from ota_0 and is what
-#    gets shipped — NOT the recovery build).
+#    gets shipped — NOT the recovery build). Reconfigure so a cached build
+#    cannot retain version metadata from before the tag was created.
 source ~/esp/esp-idf/export.sh
-idf.py build
-strings build/esp32-aes-gw.bin | grep -m1 '^v0\.'   # sanity: version string
+idf.py reconfigure build
+python -m esptool image_info --version 2 build/esp32-aes-gw.bin \
+    | grep -E 'Project name|App version'
 
 # 3. Pack the encrypted OTA image.
 python tools/fwpack.py build/esp32-aes-gw.bin esp32-fw-Release-v0.1.2.bin
