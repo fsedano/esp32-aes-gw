@@ -44,11 +44,14 @@ If either module is absent at boot, only channels from the responding module
 are declared. Startup wire logs show each discovery attempt, probed function
 and address, result, final count, and channel mapping.
 
-`main/rs485_discrete.c` runs all blocking UART work in a private task. It polls
-relay readback with FC01 on both modules, polls the M31 input with FC02, and
-applies changed relay bits with FC05. `DISCRETE_STATE.relay_state` is physical
-FC01 readback, not an optimistic echo of a gateway command. Each slave is
-declared offline after three failed output polls. The discrete link remains up
+`main/rs485_discrete.c` runs all blocking UART work in a private task. Relay
+commands wake that task immediately and take priority between periodic polls.
+Each changed relay is written with FC05, confirmed with FC01, and published
+before the worker processes another change. Periodic FC01 readback for both
+modules and M31 FC02 input sampling run one transaction at a time when no
+output change is pending. `DISCRETE_STATE.relay_state` is physical FC01
+readback, not an optimistic echo of a gateway command. Each slave is declared
+offline after three failed output transactions. The discrete link remains up
 while at least one discovered output module responds; M31 input validity is
 reported only after a successful FC02 sample.
 

@@ -52,6 +52,7 @@
 
 typedef struct {
     SemaphoreHandle_t lock;
+    TaskHandle_t task;
     bool enabled;
     uint64_t desired;
     uint8_t waveshare_outputs;
@@ -64,6 +65,27 @@ typedef struct {
     unsigned failures;
     bool online;
 } device_link_t;
+
+typedef struct {
+    uint8_t waveshare_outputs;
+    uint8_t m31_outputs;
+    uint8_t m31_inputs;
+    uint32_t waveshare_relays;
+    uint32_t m31_relays;
+    uint32_t m31_input_state;
+    bool m31_input_ok;
+    bool waveshare_write_blocked;
+    bool m31_write_blocked;
+    device_link_t waveshare_link;
+    device_link_t m31_link;
+} rs485_worker_t;
+
+typedef enum {
+    POLL_WAVESHARE_OUTPUTS,
+    POLL_M31_OUTPUTS,
+    POLL_M31_INPUTS,
+    POLL_COMPLETE,
+} poll_phase_t;
 
 static rs485_shared_t s_bus;
 
@@ -223,19 +245,32 @@ static void shared_publish(uint64_t relays, uint32_t inputs,
 }
 
 static void backend_set_enabled(bool enabled){
+    TaskHandle_t task;
     xSemaphoreTake(s_bus.lock, portMAX_DELAY);
     s_bus.enabled = enabled;
     s_bus.desired = 0;
+    task = s_bus.task;
     xSemaphoreGive(s_bus.lock);
+    if(task != NULL){
+        xTaskNotifyGive(task);
+    }
 }
 
 static void backend_set_outputs(uint64_t apply_mask, uint64_t values){
+    TaskHandle_t task = NULL;
     xSemaphoreTake(s_bus.lock, portMAX_DELAY);
     if(s_bus.enabled && s_bus.state.link){
-        s_bus.desired = (s_bus.desired & ~apply_mask)
-                      | (values & apply_mask);
+        uint64_t desired = (s_bus.desired & ~apply_mask)
+                         | (values & apply_mask);
+        if(desired != s_bus.desired){
+            s_bus.desired = desired;
+            task = s_bus.task;
+        }
     }
     xSemaphoreGive(s_bus.lock);
+    if(task != NULL){
+        xTaskNotifyGive(task);
+    }
 }
 
 static bool backend_get_state(discrete_backend_state_t *state){
@@ -254,31 +289,6 @@ static const discrete_backend_ops_t s_backend_ops = {
     .get_state = backend_get_state,
 };
 
-static bool apply_target(uint8_t unit, uint32_t current, uint32_t target,
-                         uint8_t count){
-    uint32_t changed = (current ^ target) & mask32(count);
-    for(uint8_t ch = 0; ch < count; ch++){
-        uint32_t bit = UINT32_C(1) << ch;
-        if((changed & bit) != 0u
-           && !write_coil(unit, ch, (target & bit) != 0u)){
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool service_outputs(uint8_t unit, uint8_t count, uint32_t target,
-                            uint32_t *relays){
-    if(!read_bits(unit, MODBUS_FC_READ_COILS, 0, count, relays)){
-        return false;
-    }
-    if(*relays == target){
-        return true;
-    }
-    return apply_target(unit, *relays, target, count)
-        && read_bits(unit, MODBUS_FC_READ_COILS, 0, count, relays);
-}
-
 static void update_link(device_link_t *link, bool ok, const char *name,
                         uint8_t unit){
     if(ok){
@@ -295,68 +305,179 @@ static void update_link(device_link_t *link, bool ok, const char *name,
     }
     if(link->online && link->failures >= RS485_LINK_FAILURES){
         link->online = false;
-        LOG_INF("rs485: %s unit %u link down after %u failed polls",
+        LOG_INF("rs485: %s unit %u link down after %u failed transactions",
                 name, unit, link->failures);
     }
 }
 
+static void worker_publish(const rs485_worker_t *worker){
+    uint64_t relays = worker->waveshare_relays
+                    | ((uint64_t)worker->m31_relays
+                       << worker->waveshare_outputs);
+    bool link = (worker->waveshare_outputs > 0u
+                 && worker->waveshare_link.online)
+             || (worker->m31_outputs > 0u && worker->m31_link.online);
+    bool input_valid = worker->m31_inputs > 0u
+                    && worker->m31_link.online
+                    && worker->m31_input_ok;
+    shared_publish(relays, worker->m31_input_state, input_valid, link);
+}
+
+static bool apply_device_output(rs485_worker_t *worker, const char *name,
+                                uint8_t unit, uint8_t count,
+                                uint32_t target, uint32_t *relays,
+                                device_link_t *link, bool *write_blocked){
+    uint32_t changed = (*relays ^ target) & mask32(count);
+    if(changed == 0u || !link->online || *write_blocked){
+        return false;
+    }
+
+    uint8_t channel = (uint8_t)__builtin_ctz(changed);
+    uint32_t bit = UINT32_C(1) << channel;
+    bool write_ok = write_coil(unit, channel, (target & bit) != 0u);
+    bool ok = write_ok;
+    uint32_t readback;
+    if(ok){
+        ok = read_bits(unit, MODBUS_FC_READ_COILS, 0, count, &readback);
+    }
+    if(ok){
+        *relays = readback;
+        *write_blocked = false;
+    }else{
+        *write_blocked = true;
+        if(write_ok){
+            LOG_INF("rs485: %s unit %u FC01 confirmation after address %u failed",
+                    name, unit, channel);
+        }else{
+            LOG_INF("rs485: %s unit %u FC05 address %u failed",
+                    name, unit, channel);
+        }
+    }
+    update_link(link, ok, name, unit);
+    worker_publish(worker);
+    return true;
+}
+
+static bool apply_pending_output(rs485_worker_t *worker){
+    uint8_t total_outputs = (uint8_t)(worker->waveshare_outputs
+                                    + worker->m31_outputs);
+    uint64_t target = shared_target(total_outputs);
+
+    if(worker->waveshare_outputs > 0u){
+        uint32_t device_target = (uint32_t)target
+                               & mask32(worker->waveshare_outputs);
+        if(apply_device_output(worker, "Waveshare", WAVESHARE_UNIT,
+                               worker->waveshare_outputs, device_target,
+                               &worker->waveshare_relays,
+                               &worker->waveshare_link,
+                               &worker->waveshare_write_blocked)){
+            return true;
+        }
+    }
+
+    if(worker->m31_outputs > 0u){
+        uint32_t device_target = (uint32_t)(target
+                                           >> worker->waveshare_outputs)
+                               & mask32(worker->m31_outputs);
+        if(apply_device_output(worker, "M31", M31_UNIT,
+                               worker->m31_outputs, device_target,
+                               &worker->m31_relays, &worker->m31_link,
+                               &worker->m31_write_blocked)){
+            return true;
+        }
+    }
+    return false;
+}
+
+static poll_phase_t poll_worker(rs485_worker_t *worker,
+                                poll_phase_t phase){
+    for(; phase < POLL_COMPLETE; phase++){
+        bool ok;
+        switch(phase){
+        case POLL_WAVESHARE_OUTPUTS:
+            if(worker->waveshare_outputs == 0u){
+                continue;
+            }
+            ok = read_bits(WAVESHARE_UNIT, MODBUS_FC_READ_COILS, 0,
+                           worker->waveshare_outputs,
+                           &worker->waveshare_relays);
+            worker->waveshare_write_blocked = !ok;
+            update_link(&worker->waveshare_link, ok, "Waveshare",
+                        WAVESHARE_UNIT);
+            break;
+
+        case POLL_M31_OUTPUTS:
+            if(worker->m31_outputs == 0u){
+                continue;
+            }
+            ok = read_bits(M31_UNIT, MODBUS_FC_READ_COILS, 0,
+                           worker->m31_outputs, &worker->m31_relays);
+            worker->m31_write_blocked = !ok;
+            update_link(&worker->m31_link, ok, "M31", M31_UNIT);
+            break;
+
+        case POLL_M31_INPUTS:
+            if(worker->m31_inputs == 0u || !worker->m31_link.online){
+                worker->m31_input_ok = false;
+                continue;
+            }
+            worker->m31_input_ok = read_bits(M31_UNIT,
+                                             MODBUS_FC_READ_INPUTS, 0,
+                                             worker->m31_inputs,
+                                             &worker->m31_input_state);
+            break;
+
+        case POLL_COMPLETE:
+            break;
+        }
+        worker_publish(worker);
+        return (poll_phase_t)(phase + 1);
+    }
+    return POLL_COMPLETE;
+}
+
 static void rs485_task(void *arg){
     (void)arg;
-    const uint8_t waveshare_outputs = s_bus.waveshare_outputs;
-    const uint8_t m31_outputs = s_bus.m31_outputs;
-    const uint8_t m31_inputs = s_bus.m31_inputs;
-    const uint8_t total_outputs = (uint8_t)(waveshare_outputs + m31_outputs);
-    uint32_t waveshare_relays = 0;
-    uint32_t m31_relays = 0;
-    uint32_t m31_input_state = 0;
-    device_link_t waveshare_link = {0};
-    device_link_t m31_link = {0};
+    rs485_worker_t worker = {
+        .waveshare_outputs = s_bus.waveshare_outputs,
+        .m31_outputs = s_bus.m31_outputs,
+        .m31_inputs = s_bus.m31_inputs,
+    };
+    uint8_t total_outputs = (uint8_t)(worker.waveshare_outputs
+                                    + worker.m31_outputs);
 
     if(total_outputs == 0u){
         shared_publish(0, 0, false, false);
         LOG_INF("rs485: no output channels in boot population; link down");
+        xSemaphoreTake(s_bus.lock, portMAX_DELAY);
+        s_bus.task = NULL;
+        xSemaphoreGive(s_bus.lock);
         vTaskDelete(NULL);
         return;
     }
 
+    poll_phase_t poll_phase = POLL_WAVESHARE_OUTPUTS;
+    TickType_t next_poll = xTaskGetTickCount();
     for(;;){
-        uint64_t target = shared_target(total_outputs);
-
-        bool waveshare_ok = false;
-        if(waveshare_outputs > 0u){
-            uint32_t device_target = (uint32_t)target
-                                   & mask32(waveshare_outputs);
-            waveshare_ok = service_outputs(WAVESHARE_UNIT,
-                                           waveshare_outputs,
-                                           device_target,
-                                           &waveshare_relays);
-            update_link(&waveshare_link, waveshare_ok, "Waveshare",
-                        WAVESHARE_UNIT);
+        if(apply_pending_output(&worker)){
+            continue;
         }
 
-        bool m31_ok = false;
-        bool m31_input_ok = false;
-        if(m31_outputs > 0u){
-            uint32_t device_target = (uint32_t)(target >> waveshare_outputs)
-                                   & mask32(m31_outputs);
-            m31_ok = service_outputs(M31_UNIT, m31_outputs, device_target,
-                                     &m31_relays);
-            if(m31_ok && m31_inputs > 0u){
-                m31_input_ok = read_bits(M31_UNIT, MODBUS_FC_READ_INPUTS, 0,
-                                         m31_inputs, &m31_input_state);
+        if(poll_phase < POLL_COMPLETE){
+            poll_phase = poll_worker(&worker, poll_phase);
+            if(poll_phase == POLL_COMPLETE){
+                next_poll = xTaskGetTickCount()
+                          + pdMS_TO_TICKS(RS485_POLL_MS);
             }
-            update_link(&m31_link, m31_ok, "M31", M31_UNIT);
+            continue;
         }
 
-        uint64_t relays = waveshare_relays
-                        | ((uint64_t)m31_relays << waveshare_outputs);
-        bool link = (waveshare_outputs > 0u && waveshare_link.online)
-                 || (m31_outputs > 0u && m31_link.online);
-        bool input_valid = m31_inputs > 0u && m31_link.online
-                        && m31_input_ok;
-        shared_publish(relays, m31_input_state, input_valid, link);
-
-        vTaskDelay(pdMS_TO_TICKS(RS485_POLL_MS));
+        TickType_t now = xTaskGetTickCount();
+        if((int32_t)(now - next_poll) >= 0){
+            poll_phase = POLL_WAVESHARE_OUTPUTS;
+            continue;
+        }
+        ulTaskNotifyTake(pdTRUE, next_poll - now);
     }
 }
 
@@ -455,7 +576,7 @@ void rs485_discrete_init(void){
                     M31_UNIT, first, last);
         }
     }
-    if(xTaskCreate(rs485_task, "rs485_discrete", 4096, NULL, 5, NULL)
+    if(xTaskCreate(rs485_task, "rs485_discrete", 4096, NULL, 5, &s_bus.task)
        != pdPASS){
         LOG_INF("rs485: worker task creation failed");
         uart_driver_delete(RS485_UART);
