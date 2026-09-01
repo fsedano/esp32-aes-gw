@@ -18,6 +18,10 @@ CONFIG_ETH_SPI_ETHERNET_W5500=y
 # to the factory recovery app without user action.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
+# The second-stage bootloader must not transmit diagnostics on UART0 before
+# the application configures it as the RS-485 Modbus port.
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+
 # 1 ms tick for the protocol timing services.
 CONFIG_FREERTOS_HZ=1000
 

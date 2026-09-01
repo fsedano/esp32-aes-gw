@@ -125,6 +125,8 @@ int main(void){
     /* --- max-size payload round trip ------------------------------------- */
     cap_reset();
     comm_core_init(cap_ops());
+    CHECK_EQ_U32(PROTO_MAX_PAYLOAD, 249);
+    CHECK_EQ_U32(PROTO_MAX_PACKET, 255);
     uint8_t big[PROTO_MAX_PAYLOAD];
     memset(big, 0xA5, sizeof(big));
     flen = cap_build_req(frame, 6, 0x77 /* unknown */, big, PROTO_MAX_PAYLOAD);
@@ -138,6 +140,46 @@ int main(void){
                     | ((uint32_t)pl[3] << 16) | ((uint32_t)pl[4] << 24);
     CHECK_EQ_U32(status, PROTO_ST_ERROR);
     CHECK(pl[0] == 6);
+
+    /* The one-byte payload length can represent 250, but the protocol's
+       total packet limit cannot. Reject it before touching the destination. */
+    uint8_t too_big[250] = {0};
+    memset(frame, 0x5A, sizeof(frame));
+    flen = comm_core_build_frame(frame, 0x77, too_big, sizeof(too_big));
+    CHECK_EQ_U32(flen, 0);
+    for(size_t i = 0; i < sizeof(frame); i++){
+        CHECK(frame[i] == 0x5A);
+    }
+
+    /* A non-empty frame needs actual payload storage. */
+    flen = comm_core_build_frame(frame, 0x77, NULL, 1);
+    CHECK_EQ_U32(flen, 0);
+    for(size_t i = 0; i < sizeof(frame); i++){
+        CHECK(frame[i] == 0x5A);
+    }
+
+    /* Reject an oversized inbound frame and recover the valid frame after
+       it without dispatching the invalid command. */
+    cap_reset();
+    comm_core_init(cap_ops());
+    memset(buf, 0, 256);
+    buf[0] = (uint8_t)(PROTO_HEAD & 0xFFu);
+    buf[1] = (uint8_t)(PROTO_HEAD >> 8);
+    buf[2] = 0x44;
+    buf[3] = 250;
+    buf[4] = 0x77;
+    uint8_t oversized_csum = 0;
+    for(size_t i = PROTO_CSUM_START; i < 255; i++){
+        oversized_csum += buf[i];
+    }
+    buf[255] = oversized_csum;
+    flen = cap_build_req(frame, 0x45, CMD_PING, NULL, 0);
+    memcpy(buf + 256, frame, flen);
+    used = comm_core_input(buf, (uint16_t)(256 + flen), COMM_SRC_TCP);
+    CHECK_EQ_U32(used, 256 + flen);
+    CHECK_EQ_U32(cap_tcp.frames, 1);
+    pl = cap_frame(&cap_tcp, 0, &cmd, &plen, &pid);
+    CHECK(pl != NULL && cmd == CMD_PING && plen == 5 && pl[0] == 0x45);
 
     return test_report("framing");
 }

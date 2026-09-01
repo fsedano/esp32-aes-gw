@@ -33,7 +33,7 @@ extern "C" {
 #define PROTO_HEADER_SIZE   5
 #define PROTO_CSUM_SIZE     1
 #define PROTO_CSUM_START    2               /* checksum coverage starts here  */
-#define PROTO_MAX_PAYLOAD   250             /* size field max (0xFA)          */
+#define PROTO_MAX_PAYLOAD   249             /* 255-byte packet minus framing  */
 #define PROTO_MAX_PACKET    (PROTO_HEADER_SIZE + PROTO_MAX_PAYLOAD + PROTO_CSUM_SIZE)
 
 /* ====================================================================== */

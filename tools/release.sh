@@ -114,6 +114,14 @@ app_image="$release_build_dir/esp32-aes-gw.bin"
 release_image="esp32-fw-Release-${release_tag}.bin"
 commit="$(git rev-parse --short=8 HEAD)"
 
+release_config_dir="$(mktemp -d "${TMPDIR:-/tmp}/esp32-aes-gw-release.XXXXXX")"
+release_sdkconfig="$release_config_dir/sdkconfig"
+cleanup_release_config() {
+    rm -f "$release_sdkconfig" "$release_sdkconfig.old"
+    rmdir "$release_config_dir"
+}
+trap cleanup_release_config EXIT
+
 echo "Firmware version : $firmware_version"
 echo "Git version basis : $git_version"
 echo "Release tag      : $release_tag"
@@ -155,6 +163,8 @@ python -c 'import cryptography' >/dev/null 2>&1 \
     || die "Python package 'cryptography' is missing; run: pip install cryptography"
 
 idf.py -B "$release_build_dir" \
+    -DSDKCONFIG="$release_sdkconfig" \
+    -DSDKCONFIG_DEFAULTS="$repo_root/sdkconfig.defaults" \
     -DFW_VERSION_OVERRIDE="$firmware_version" reconfigure build
 [[ -f "$app_image" ]] || die "application build did not produce $app_image"
 

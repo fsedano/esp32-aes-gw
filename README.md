@@ -22,6 +22,11 @@ the OTG PHY at boot. Runtime logs go to the gateway over Ethernet; UART0
 updates are OTA over Ethernet; ROM download mode (hold BOOT) remains the
 bench fallback.
 
+The application and second-stage bootloader consoles are disabled on UART0.
+The ESP32-S3 mask ROM runs before software configuration and may still emit
+boot diagnostics according to the chip's ROM-print strapping/eFuse settings;
+permanent ROM suppression is a board provisioning decision.
+
 Authoritative protocol spec: `aes-gw2/docs/WIRE_PROTOCOL.md`.
 
 ## UART / RS-485 discrete I/O
@@ -239,7 +244,8 @@ long Git-derived dirty versions are shortened automatically. If repeated
 dirty builds share the same commit, pass a fresh explicit tag. Environment
 variables `FW_RELEASE_REPO`, `FW_RELEASE_TARGET`, `FW_RELEASE_BUILD_DIR`, and
 `IDF_EXPORT` override the defaults; release builds use the isolated
-`build-release/` directory. The equivalent manual procedure follows.
+`build-release/` directory and regenerate their configuration from
+`sdkconfig.defaults`. The equivalent manual procedure follows.
 
 ```sh
 # 1. Tag the release commit. Use an exact, clean tag: gen_version.cmake then

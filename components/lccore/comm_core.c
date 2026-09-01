@@ -84,6 +84,10 @@ bool comm_core_any_channel_enabled(void){
 
 uint16_t comm_core_build_frame(uint8_t *pkt, uint8_t cmd,
                                const uint8_t *payload, uint8_t len){
+    if(pkt == NULL || len > PROTO_MAX_PAYLOAD
+       || (len > 0u && payload == NULL)){
+        return 0;
+    }
     pkt[0] = (uint8_t)(PROTO_HEAD & 0xFF);          /* 0xBB */
     pkt[1] = (uint8_t)((PROTO_HEAD >> 8) & 0xFF);   /* 0xAA */
     pkt[2] = g_tx_id++;
@@ -108,7 +112,9 @@ void comm_core_send_tcp(uint8_t cmd, const uint8_t *payload, uint8_t len){
     }
     uint8_t pkt[PROTO_MAX_PACKET];
     uint16_t total = comm_core_build_frame(pkt, cmd, payload, len);
-    g_ops->send_tcp(pkt, total);
+    if(total > 0u){
+        g_ops->send_tcp(pkt, total);
+    }
 }
 
 /* CRITICAL: never log from here — this is also the log-flush path. */
@@ -118,7 +124,7 @@ bool comm_core_send_udp(uint8_t cmd, const uint8_t *payload, uint8_t len){
     }
     uint8_t pkt[PROTO_MAX_PACKET];
     uint16_t total = comm_core_build_frame(pkt, cmd, payload, len);
-    return g_ops->send_udp(pkt, total);
+    return total > 0u && g_ops->send_udp(pkt, total);
 }
 
 /* ACK envelope byte counts: [req_id | status(LE32)] + up to 244 extra bytes.
@@ -858,6 +864,11 @@ uint16_t comm_core_input(uint8_t *buf, uint16_t len, uint8_t src){
         uint8_t  size  = p[3];
         uint8_t  cmd   = p[4];
         uint16_t total = (uint16_t)(PROTO_HEADER_SIZE + size + PROTO_CSUM_SIZE);
+
+        if(size > PROTO_MAX_PAYLOAD){
+            off++;
+            continue;
+        }
 
         if(avail < total){
             break;              /* incomplete: wait for more bytes */
