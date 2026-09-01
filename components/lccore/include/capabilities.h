@@ -18,7 +18,7 @@ extern "C" {
 #define CAPS_DESC_VERSION  1u
 #define CAPS_CHUNK_MAX     240u
 
-/* Build the immutable version-1 descriptor from the boot-time M31 process
+/* Build the immutable version-1 descriptor from the boot-time discrete process
    image. The fixed USB HID complement is appended automatically. */
 void capabilities_init(uint16_t discrete_inputs, uint16_t discrete_outputs);
 

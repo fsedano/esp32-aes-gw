@@ -2,8 +2,7 @@
   ******************************************************************************
   * @file    discrete_glue.h
   * @brief   Nonblocking seam between the comm wire-protocol layer and a
-  *          discrete-I/O backend (the ESP application binds the M31-U
-  *          Modbus/RTU worker).
+  *          discrete-I/O backend.
   ******************************************************************************
   */
 
@@ -18,9 +17,9 @@ extern "C" {
 #include <stdint.h>
 
 typedef struct {
-    uint32_t relay_state;       /* physical FC01 readback                 */
-    uint32_t input_state;       /* physical FC02 samples                  */
-    uint32_t input_valid;       /* sampled inputs present and trustworthy */
+    uint64_t relay_state;       /* physical FC01 readback                 */
+    uint64_t input_state;       /* physical FC02 samples                  */
+    uint64_t input_valid;       /* sampled inputs present and trustworthy */
     bool     link;              /* backend is online and usable           */
 } discrete_backend_state_t;
 
@@ -28,7 +27,7 @@ typedef struct {
    The backend owns any worker task, UART transactions and synchronization. */
 typedef struct {
     void (*set_enabled)(bool enabled);
-    void (*set_outputs)(uint32_t apply_mask, uint32_t values);
+    void (*set_outputs)(uint64_t apply_mask, uint64_t values);
     bool (*get_state)(discrete_backend_state_t *state);
 } discrete_backend_ops_t;
 
@@ -36,8 +35,7 @@ typedef struct {
 void discrete_glue_bind(const discrete_backend_ops_t *ops);
 
 /* Set the immutable per-boot process-image widths advertised by the
-   capability descriptor. The current M31 backend supports at most 32 of
-   either direction. STATE reports one range covering the larger width. */
+   capability descriptor. STATE reports one range covering the larger width. */
 void discrete_glue_configure(uint16_t input_count, uint16_t output_count);
 
 /* One-time init. */
@@ -51,9 +49,9 @@ void discrete_glue_reset(void);
    wire status code. */
 uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms);
 
-/* Apply a range-decoded local M31 relay mask. Writes are silently
+/* Apply a range-decoded local relay mask. Writes are silently
    dropped while disabled or while the backend link is down. */
-void discrete_glue_set(uint32_t apply_mask, uint32_t values);
+void discrete_glue_set(uint64_t apply_mask, uint64_t values);
 
 /* Periodic service (comm task): emit pending / heartbeat STATE frames via
    comm_core_send_udp. */

@@ -28,10 +28,10 @@
 #include "hid_port.h"
 #include "identity.h"
 #include "ota_ops.h"
-#include "m31_modbus.h"
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
+#include "rs485_discrete.h"
 #include "ssdp_task.h"
 
 static const char *TAG = "app_main";
@@ -46,12 +46,12 @@ void app_main(void){
     lc_port_init();
     lc_log_init();
 
-    /* M31-U discrete I/O over Modbus RTU. Its worker owns UART0 and binds
-       the nonblocking backend consumed by the Ethernet wire protocol. */
+    /* The Modbus RTU worker owns UART0 and binds the nonblocking backend
+       consumed by the Ethernet wire protocol. */
 #ifndef RECOVERY_BUILD
-    m31_modbus_init();
-    uint16_t discrete_inputs = m31_modbus_input_count();
-    uint16_t discrete_outputs = m31_modbus_output_count();
+    rs485_discrete_init();
+    uint16_t discrete_inputs = rs485_discrete_input_count();
+    uint16_t discrete_outputs = rs485_discrete_output_count();
     discrete_glue_configure(discrete_inputs, discrete_outputs);
     capabilities_init(discrete_inputs, discrete_outputs);
 #endif

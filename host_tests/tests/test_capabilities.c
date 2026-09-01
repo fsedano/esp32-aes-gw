@@ -30,26 +30,24 @@ static const uint8_t *request(uint8_t src, uint8_t id,
 }
 
 int main(void){
-    /* Golden descriptor for the live bench population discovered in the
-       preceding bring-up: 16 relay outputs, one digital input, plus the
-       fixed 8-axis / 32-button USB HID interface. */
+    /* Golden descriptor for 32 Waveshare relays, 16 M31 relays, one M31
+       digital input, and the fixed 8-axis / 32-button USB HID interface. */
     static const uint8_t expected[] = {
         0x01, 0x00, 0x00, 0x00,
-        0x01, 0x39, 0x00,
-          0x01, 0x24, 0x00,
-            'A','E','S',' ','E','S','P','3','2',' ','M','3','1',' ',
+        0x01, 0x3C, 0x00,
+          0x01, 0x27, 0x00,
+            'A','E','S',' ','E','S','P','3','2',' ','R','S','-','4','8','5',' ',
             'd','i','s','c','r','e','t','e',' ','I','/','O',' ','+',' ',
             'U','S','B',' ','H','I','D',
           0x02, 0x0F, 0x00,
             'A','E','S','-','E','S','P','-','M','3','1','-','H','I','D',
-        0x02, 0x27, 0x00,
+        0x02, 0x25, 0x00,
           0x02, 0x00,
           0x01, 0x00, 0x00, 0x00,
-          0x10, 0x00, 0x00, 0x00,
+          0x30, 0x00, 0x00, 0x00,
           0x00, 0x00, 0x00, 0x00,
-          0x01, 0x12, 0x00,
-            'M','3','1','-','U',' ','d','i','s','c','r','e','t','e',' ',
-            'I','/','O',
+          0x01, 0x10, 0x00,
+            'R','S','-','4','8','5',' ','r','e','l','a','y',' ','I','/','O',
           0x10, 0x01, 0x00, 0x00,
         0x02, 0x1D, 0x00,
           0x05, 0x00,
@@ -69,7 +67,7 @@ int main(void){
 
     lc_port_init();
     lc_log_init();
-    capabilities_init(1, 16);
+    capabilities_init(1, 48);
     CHECK(capabilities_available());
     CHECK_EQ_U32(capabilities_version(), 1);
     uint16_t blob_len = 0;
@@ -92,7 +90,7 @@ int main(void){
     CHECK_MEM(ack + 7, expected, sizeof(expected));
 
     static const char summary[] =
-        "caps: v1 173 bytes; discrete 1 DI/16 DO relay; HID 8 axes/32 buttons";
+        "caps: v1 174 bytes; discrete 1 DI/48 DO relay; HID 8 axes/32 buttons";
     uint8_t log_payload[PROTO_MAX_PAYLOAD];
     uint8_t log_len = lc_log_net_build_packet(log_payload,
                                                sizeof(log_payload));

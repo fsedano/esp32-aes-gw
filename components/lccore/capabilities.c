@@ -30,8 +30,8 @@
 #define CAPS_DISCRETE_OUT_DRIVER  0x10u
 #define CAPS_OUT_DRIVER_RELAY     0x00u
 
-#define CAPS_DISPLAY_NAME         "AES ESP32 M31 discrete I/O + USB HID"
-#define CAPS_DISCRETE_LABEL       "M31-U discrete I/O"
+#define CAPS_DISPLAY_NAME         "AES ESP32 RS-485 discrete I/O + USB HID"
+#define CAPS_DISCRETE_LABEL       "RS-485 relay I/O"
 #define CAPS_HID_AXIS_LABEL       "USB HID axes"
 #define CAPS_HID_BUTTON_LABEL     "USB HID buttons"
 
@@ -149,8 +149,8 @@ void capabilities_init(uint16_t discrete_inputs, uint16_t discrete_outputs){
     put_string_tlv(&b, CAPS_BOARD_ID, BOARD_INFO_SHORT_ID);
     end_tlv(&b, board);
 
-    /* First group is the primary protocol. Omit it only when no M31 process
-       image was discovered; HID then becomes the first/primary group. */
+    /* First group is the primary protocol. Omit it only when no discrete
+       process image was discovered; HID then becomes the primary group. */
     if(discrete_inputs > 0 || discrete_outputs > 0){
         uint16_t group;
         begin_group(&b, CAPS_KIND_DISCRETE, discrete_inputs,

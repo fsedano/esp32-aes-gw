@@ -17,14 +17,14 @@
 
 #define DISCRETE_DEFAULT_REPORT_MS  500u
 #define DISCRETE_DISABLE_TIMEOUT_MS 2000u
-#define DISCRETE_LOCAL_MAX_CHANNELS 32u
+#define DISCRETE_LOCAL_MAX_CHANNELS 64u
 
 typedef struct {
     bool     enabled;
     bool     disabling;     /* waiting for physical all-off confirmation */
     uint32_t disable_started_ms;
     uint16_t report_ms;
-    uint32_t desired;       /* host-commanded relay bits                  */
+    uint64_t desired;       /* host-commanded relay bits                  */
     discrete_backend_state_t hw;
     bool     hw_seen;
     uint8_t  seq;           /* per-send counter, wraps                    */
@@ -85,13 +85,13 @@ static void emit_state(void){
     }
 
     uint16_t bitmap_bytes = PROTO_DISCRETE_BITMAP_BYTES(bit_count);
-    uint8_t payload[PROTO_DISCRETE_STATE_HEADER_SIZE + 3u * sizeof(uint32_t)] = {0};
+    uint8_t payload[PROTO_DISCRETE_STATE_HEADER_SIZE + 3u * sizeof(uint64_t)] = {0};
     payload[4] = (uint8_t)bit_count;
     payload[5] = (uint8_t)(bit_count >> 8);
     payload[6] = g_disc.hw.link ? 1u : 0u;
     payload[7] = g_disc.seq;
 
-    const uint32_t maps[3] = {
+    const uint64_t maps[3] = {
         g_disc.hw.relay_state,
         g_disc.hw.input_state,
         g_disc.hw.input_valid,
@@ -125,7 +125,7 @@ void discrete_glue_init(void){
 
 void discrete_glue_reset(void){
     bool was_enabled = g_disc.enabled;
-    uint32_t had_bits = g_disc.hw.relay_state;
+    uint64_t had_bits = g_disc.hw.relay_state;
     if(g_backend != NULL && g_backend->set_enabled != NULL){
         /* Session loss is a fail-safe edge. The worker keeps retrying the
            zero target independently of the now-closed Ethernet session. */
@@ -174,14 +174,14 @@ uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms){
     return PROTO_ST_OK;
 }
 
-void discrete_glue_set(uint32_t apply_mask, uint32_t values){
+void discrete_glue_set(uint64_t apply_mask, uint64_t values){
     if(!g_disc.enabled || g_disc.disabling){
         return;
     }
-    uint32_t valid_outputs = UINT32_MAX;
-    if(g_output_count < 32u){
+    uint64_t valid_outputs = UINT64_MAX;
+    if(g_output_count < 64u){
         valid_outputs = g_output_count == 0u
-                      ? 0u : (1u << g_output_count) - 1u;
+                      ? 0u : (UINT64_C(1) << g_output_count) - 1u;
     }
     apply_mask &= valid_outputs;
     values &= valid_outputs;
@@ -194,9 +194,10 @@ void discrete_glue_set(uint32_t apply_mask, uint32_t values){
            gateway keeps them pending and retries after STATE reports link. */
         return;
     }
-    uint32_t next = (g_disc.desired & ~apply_mask) | (values & apply_mask);
+    uint64_t next = (g_disc.desired & ~apply_mask) | (values & apply_mask);
     if(next != g_disc.desired){
-        LOG_DBG("discrete: desired relays 0x%08x", (unsigned)next);
+        LOG_DBG("discrete: desired relays 0x%016llx",
+                (unsigned long long)next);
     }
     g_disc.desired = next;
     if(g_backend != NULL && g_backend->set_outputs != NULL){

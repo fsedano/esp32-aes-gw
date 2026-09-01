@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    board_id.h
-  * @brief   Board identity constants for the ESP32-S3 M31/HID linecard.
+  * @brief   Board identity constants for the ESP32-S3 RS-485/HID linecard.
   *
   *          Mirrors arinc4i4o's board_info.h. The SSDP SERVER board_id token
   *          is what the gateway uses to identify the card type; this card
@@ -34,16 +34,16 @@ extern "C" {
    SERVER token (unbounded), and the gateway strips "BL-" before matching
    BoardIDs. */
 #ifdef RECOVERY_BUILD
-#define BOARD_FRIENDLY_NAME     "AES ESP M31 HID Interface (BL)"
-#define BOARD_MODEL_NAME        "AES ESP M31 HID"
+#define BOARD_FRIENDLY_NAME     "AES ESP RS485 HID Interface (BL)"
+#define BOARD_MODEL_NAME        "AES ESP RS485 HID"
 #define BOARD_INFO_MODEL        "BL-AES-ESP-M31-HID"
 #define BOARD_INFO_SHORT_ID     "BL-AES-ESP-M31-HID"
 #define BOARD_INFO_FW_TAG       ("bl-" VERSION_STRING)
 #define BOARD_INFO_FW_TYPE      ((uint8_t) 1)   /* GET_FW_INFO: bootloader */
 #define BOARD_INFO_FW_BRANCH    "recovery"
 #else
-#define BOARD_FRIENDLY_NAME     "AES ESP M31 HID Interface"
-#define BOARD_MODEL_NAME        "AES ESP M31 HID"
+#define BOARD_FRIENDLY_NAME     "AES ESP RS485 HID Interface"
+#define BOARD_MODEL_NAME        "AES ESP RS485 HID"
 #define BOARD_INFO_MODEL        "AES-ESP-M31-HID"
 #define BOARD_INFO_SHORT_ID     "AES-ESP-M31-HID"
 #define BOARD_INFO_FW_TAG       (VERSION_STRING)

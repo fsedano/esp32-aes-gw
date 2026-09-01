@@ -649,14 +649,14 @@ static void handle_discrete_set(uint8_t req_id, const uint8_t *payload,
         }else{
             const uint8_t *apply = payload + PROTO_DISCRETE_SET_HEADER_SIZE;
             const uint8_t *values = apply + bitmap_bytes;
-            uint32_t local_apply = 0;
-            uint32_t local_values = 0;
+            uint64_t local_apply = 0;
+            uint64_t local_values = 0;
             for(uint16_t i = 0; i < bit_count; i++){
                 uint32_t channel = base_channel + i;
-                if(channel >= 32u || (apply[i / 8u] & (1u << (i % 8u))) == 0u){
+                if(channel >= 64u || (apply[i / 8u] & (1u << (i % 8u))) == 0u){
                     continue;
                 }
-                uint32_t mask = 1u << channel;
+                uint64_t mask = UINT64_C(1) << channel;
                 local_apply |= mask;
                 if((values[i / 8u] & (1u << (i % 8u))) != 0u){
                     local_values |= mask;

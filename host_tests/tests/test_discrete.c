@@ -19,7 +19,7 @@ static uint8_t g_frame[PROTO_MAX_PACKET];
 
 typedef struct {
     bool enabled;
-    uint32_t desired;
+    uint64_t desired;
     unsigned set_calls;
     discrete_backend_state_t state;
 } fake_backend_t;
@@ -31,7 +31,7 @@ static void fake_set_enabled(bool enabled){
     g_fake.desired = 0;
 }
 
-static void fake_set_outputs(uint32_t apply_mask, uint32_t values){
+static void fake_set_outputs(uint64_t apply_mask, uint64_t values){
     if(g_fake.enabled && g_fake.state.link){
         g_fake.desired = (g_fake.desired & ~apply_mask) | (values & apply_mask);
         g_fake.set_calls++;
@@ -65,17 +65,17 @@ static uint32_t ack_status(const uint8_t *pl){
 typedef struct {
     uint32_t base_channel;
     uint16_t bit_count;
-    uint32_t relay_state;
-    uint32_t input_state;
-    uint32_t input_valid;
+    uint64_t relay_state;
+    uint64_t input_state;
+    uint64_t input_valid;
     uint8_t link;
     uint8_t seq;
 } state_view_t;
 
-static uint32_t bitmap_u32(const uint8_t *bitmap, uint16_t bytes){
-    uint32_t value = 0;
-    for(uint16_t i = 0; i < bytes && i < 4u; i++){
-        value |= (uint32_t)bitmap[i] << (8u * i);
+static uint64_t bitmap_u64(const uint8_t *bitmap, uint16_t bytes){
+    uint64_t value = 0;
+    for(uint16_t i = 0; i < bytes && i < 8u; i++){
+        value |= (uint64_t)bitmap[i] << (8u * i);
     }
     return value;
 }
@@ -93,7 +93,7 @@ static const state_view_t *next_state(void){
     }
     uint16_t count = (uint16_t)pl[4] | ((uint16_t)pl[5] << 8);
     uint16_t bytes = PROTO_DISCRETE_BITMAP_BYTES(count);
-    if(count == 0u || count > 32u
+    if(count == 0u || count > 64u
        || plen != PROTO_DISCRETE_STATE_HEADER_SIZE + 3u * bytes){
         return NULL;
     }
@@ -102,23 +102,23 @@ static const state_view_t *next_state(void){
     state.bit_count = count;
     state.link = pl[6];
     state.seq = pl[7];
-    state.relay_state = bitmap_u32(pl + 8, bytes);
-    state.input_state = bitmap_u32(pl + 8 + bytes, bytes);
-    state.input_valid = bitmap_u32(pl + 8 + 2u * bytes, bytes);
+    state.relay_state = bitmap_u64(pl + 8, bytes);
+    state.input_state = bitmap_u64(pl + 8 + bytes, bytes);
+    state.input_valid = bitmap_u64(pl + 8 + 2u * bytes, bytes);
     return &state;
 }
 
-static uint8_t build_set(uint8_t out[14], uint32_t base, uint16_t count,
-                         uint32_t apply, uint32_t values){
+static uint8_t build_set(uint8_t out[22], uint32_t base, uint16_t count,
+                         uint64_t apply, uint64_t values){
     uint16_t bytes = PROTO_DISCRETE_BITMAP_BYTES(count);
-    memset(out, 0, 14);
+    memset(out, 0, 22);
     out[0] = (uint8_t)base;
     out[1] = (uint8_t)(base >> 8);
     out[2] = (uint8_t)(base >> 16);
     out[3] = (uint8_t)(base >> 24);
     out[4] = (uint8_t)count;
     out[5] = (uint8_t)(count >> 8);
-    for(uint16_t i = 0; i < bytes && i < 4u; i++){
+    for(uint16_t i = 0; i < bytes && i < 8u; i++){
         out[6 + i] = (uint8_t)(apply >> (8u * i));
         out[6 + bytes + i] = (uint8_t)(values >> (8u * i));
     }
@@ -133,7 +133,7 @@ int main(void){
     g_fake.state.input_valid = 1;
     g_fake.state.link = true;
     discrete_glue_bind(&FAKE_OPS);
-    discrete_glue_configure(1, 16);
+    discrete_glue_configure(1, 48);
     cap_reset();
     comm_core_init(cap_ops());
     host_port_set_tick(0);
@@ -162,7 +162,7 @@ int main(void){
     const state_view_t *st = next_state();
     CHECK(st != NULL);
     CHECK_EQ_U32(st->base_channel, 0);
-    CHECK_EQ_U32(st->bit_count, 16);
+    CHECK_EQ_U32(st->bit_count, 48);
     CHECK_EQ_U32(st->relay_state, 0);
     CHECK_EQ_U32(st->input_state, 0);           /* one input, constant idle */
     CHECK_EQ_U32(st->input_valid, 1);           /* input 0 present + valid
@@ -173,8 +173,10 @@ int main(void){
     const uint8_t *state_payload = cap_frame(&cap_udp, 0, &state_cmd,
                                              &state_len, NULL);
     static const uint8_t state_golden[] = {
-        0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
     CHECK(state_payload != NULL && state_cmd == CMD_DISCRETE_STATE);
     CHECK_EQ_U32(state_len, sizeof(state_golden));
@@ -183,7 +185,7 @@ int main(void){
 
     /* A SET updates backend intent but must not optimistically report the
        relay. Only a later physical snapshot confirms it. */
-    uint8_t set[14];
+    uint8_t set[22];
     uint8_t set_len = build_set(set, 0, 16, 0x0000000F, 0x00000005);
     static const uint8_t set_golden[] = {
         0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
@@ -215,8 +217,19 @@ int main(void){
     CHECK(st != NULL);
     CHECK_EQ_U32(st->relay_state, 0x7);
 
+    /* A range above channel 31 maps into the upper half of the local image. */
+    set_len = build_set(set, 32, 16, 0x8001, 0x8001);
+    pl = req(COMM_SRC_UDP, 50, CMD_DISCRETE_SET, set, set_len);
+    CHECK(pl == NULL);
+    uint64_t upper_relays = (UINT64_C(0x8001) << 32) | 0x7u;
+    CHECK_EQ_U32(g_fake.desired, upper_relays);
+    g_fake.state.relay_state = upper_relays;
+    st = next_state();
+    CHECK(st != NULL);
+    CHECK_EQ_U32(st->relay_state, upper_relays);
+
     /* Malformed ranges return the payload error on TCP; UDP remains silent.
-       A valid range outside the declared 16 outputs has no backend effect. */
+       A valid range outside the declared 48 outputs has no backend effect. */
     uint8_t malformed[8] = {0};
     pl = req(COMM_SRC_TCP, 51, CMD_DISCRETE_SET, malformed, 5);
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT);
@@ -226,7 +239,7 @@ int main(void){
     pl = req(COMM_SRC_TCP, 53, CMD_DISCRETE_SET, malformed, sizeof(malformed));
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT);
     unsigned calls_before_oor = g_fake.set_calls;
-    set_len = build_set(set, 16, 1, 1, 1);
+    set_len = build_set(set, 48, 1, 1, 1);
     pl = req(COMM_SRC_TCP, 54, CMD_DISCRETE_SET, set, set_len);
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_OK);
     CHECK_EQ_U32(g_fake.set_calls, calls_before_oor);
@@ -238,7 +251,7 @@ int main(void){
     host_port_set_tick(lc_port_tick_ms() + 600);
     st = next_state();
     CHECK(st != NULL);
-    CHECK_EQ_U32(st->relay_state, 0x7);
+    CHECK_EQ_U32(st->relay_state, upper_relays);
 
     /* SETUP(enable=0): backend is immediately fail-safe disabled; heartbeat
        stops after a physical all-off snapshot is observed. */
