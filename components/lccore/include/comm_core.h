@@ -66,7 +66,7 @@ uint16_t comm_core_input(uint8_t *buf, uint16_t len, uint8_t src);
 
 /* Build a framed packet [BB AA | id | size | cmd | payload | csum] into pkt
    (PROTO_MAX_PACKET bytes) using the shared outgoing id counter. Returns the
-   total frame length, 0 if len > PROTO_MAX_PAYLOAD. */
+   total frame length, or 0 for invalid pointers or an oversized payload. */
 uint16_t comm_core_build_frame(uint8_t *pkt, uint8_t cmd,
                                const uint8_t *payload, uint8_t len);
 

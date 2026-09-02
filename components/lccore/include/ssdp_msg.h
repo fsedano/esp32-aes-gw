@@ -1,9 +1,7 @@
 /**
   ******************************************************************************
   * @file    ssdp_msg.h
-  * @brief   SSDP / UPnP message builders, byte-for-byte compatible with the
-  *          STM32 sibling's ssdp.c (which is what the gateway and aviologic
-  *          are proven to parse).
+  * @brief   SSDP / UPnP message builders for the gateway wire protocol.
   *
   *          The builders are pure string generators so they compile on the
   *          host for golden-byte unit tests; the sockets live in main/.
@@ -22,12 +20,13 @@ extern "C" {
 
 /* Identity snapshot consumed by the builders. All strings NUL-terminated. */
 typedef struct {
-    const char *uuid;        /* 24-char USN uuid                       */
+    const char *uuid;        /* 24-char UUID, emitted with uuid: prefix */
     const char *ip;          /* dotted-quad device IP                  */
     const char *board_id;    /* SSDP SERVER first token (BOARD_INFO_SHORT_ID) */
     const char *fw_tag;      /* version string after the '/'           */
     const char *serial;      /* description.xml <serialNumber>         */
     uint16_t    http_port;   /* description.xml port (80 on target)    */
+    uint8_t     caps_version;/* X-AES-CAPS value; 0 omits the header   */
 } ssdp_ident_t;
 
 /* NOTIFY ssdp:alive (multicast). Returns bytes written (no NUL), 0 if cap

@@ -33,7 +33,7 @@ extern "C" {
 #define PROTO_HEADER_SIZE   5
 #define PROTO_CSUM_SIZE     1
 #define PROTO_CSUM_START    2               /* checksum coverage starts here  */
-#define PROTO_MAX_PAYLOAD   250             /* size field max (0xFA)          */
+#define PROTO_MAX_PAYLOAD   249             /* 255-byte packet minus framing  */
 #define PROTO_MAX_PACKET    (PROTO_HEADER_SIZE + PROTO_MAX_PAYLOAD + PROTO_CSUM_SIZE)
 
 /* ====================================================================== */
@@ -42,6 +42,7 @@ extern "C" {
 #define CMD_GET_FW_INFO         0x06
 #define CMD_GET_UID             0x09
 #define CMD_ARINC_RECV_LABELS   0x0B        /* dev->host, UDP                 */
+#define CMD_SET_HW_INFO         0x0C        /* host->dev, legacy bootloader    */
 #define CMD_GET_HW_INFO         0x0D
 #define CMD_DEVICE_STATUS       0x0E        /* dev->host, TCP periodic        */
 #define CMD_FW_UPDATE           0x0F        /* host->dev, recovery build only */
@@ -56,6 +57,7 @@ extern "C" {
 #define CMD_FIND_ME             0x22
 #define CMD_LOG_MSG             0x24        /* dev->host, UDP, unsolicited    */
 #define CMD_SET_LOG_LEVEL       0x25        /* host->dev, TCP, standard ACK   */
+#define CMD_GET_CAPABILITIES    0x26        /* host->dev, TCP, chunked ACK    */
 #define CMD_DISCRETE_SETUP      0x30        /* host->dev, TCP (ACKed)         */
 #define CMD_DISCRETE_SET        0x31        /* host->dev, UDP (or TCP+ACK)    */
 #define CMD_DISCRETE_STATE      0x32        /* dev->host, UDP                 */
@@ -80,6 +82,7 @@ extern "C" {
 #define PROTO_ST_ARINC_TX_ERR_CHNL_NOT_INIT  15u
 #define PROTO_ST_ARINC_RX_ERR_CHNL_OOR       19u
 #define PROTO_ST_ARINC_RX_ERR_CHNL_NOT_INIT  21u
+#define PROTO_ST_CAPS_ERR_VERSION_UNSUPPORTED 70u
 
 /* ====================================================================== */
 /* Channel enums  (proto/proto.go)                                        */
@@ -143,23 +146,34 @@ typedef struct __attribute__((packed)) {
     uint16_t report_ms;
 } proto_discrete_setup_t;
 
-/* DISCRETE_SET (0x31), 8 bytes <II>: desired =
-   (desired & ~apply_mask) | (values & apply_mask). Relay bits 0..31.
-   Idempotent; UDP fire-and-forget or TCP with ACK. */
+/* DISCRETE_SET (0x31): a 6-byte range header followed by two
+   ceil(bit_count/8)-byte bitmaps (apply, values). Bit i addresses
+   base_channel+i. Idempotent; UDP fire-and-forget or TCP with ACK. */
 typedef struct __attribute__((packed)) {
-    uint32_t apply_mask;
-    uint32_t values;
-} proto_discrete_set_t;
+    uint32_t base_channel;
+    uint16_t bit_count;
+} proto_discrete_set_header_t;
 
-/* DISCRETE_STATE (0x32), 14 bytes <IIIBB>: dev->host over UDP on change and
-   every report_ms. */
+/* DISCRETE_STATE (0x32): an 8-byte range header followed by three
+   ceil(bit_count/8)-byte bitmaps (relay_state, input_state, input_valid).
+   Device->host over UDP on change and every report_ms. */
 typedef struct __attribute__((packed)) {
-    uint32_t relay_state;
-    uint32_t input_state;
-    uint32_t input_valid;
+    uint32_t base_channel;
+    uint16_t bit_count;
     uint8_t  link;
     uint8_t  seq;
-} proto_discrete_state_t;
+} proto_discrete_state_header_t;
+
+#define PROTO_DISCRETE_SET_HEADER_SIZE    6u
+#define PROTO_DISCRETE_STATE_HEADER_SIZE  8u
+#define PROTO_DISCRETE_BITMAP_BYTES(n)    (((uint16_t)(n) + 7u) / 8u)
+
+_Static_assert(sizeof(proto_discrete_set_header_t) ==
+               PROTO_DISCRETE_SET_HEADER_SIZE,
+               "DISCRETE_SET range header layout drift");
+_Static_assert(sizeof(proto_discrete_state_header_t) ==
+               PROTO_DISCRETE_STATE_HEADER_SIZE,
+               "DISCRETE_STATE range header layout drift");
 
 /* USB HID joystick channel group (8 axes + 32 buttons), wire doc §12.
    The card presents a HID gamepad to the PC on its USB port; the host

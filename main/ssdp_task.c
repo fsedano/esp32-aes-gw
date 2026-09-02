@@ -30,6 +30,7 @@
 #include "esp_log.h"
 
 #include "board_id.h"
+#include "capabilities.h"
 #include "identity.h"
 #include "net_eth.h"
 #include "ssdp_msg.h"
@@ -54,6 +55,11 @@ static void fill_ident(ssdp_ident_t *id){
     id->fw_tag    = BOARD_INFO_FW_TAG;
     id->serial    = identity_serial();
     id->http_port = SSDP_HTTP_PORT;
+#ifdef RECOVERY_BUILD
+    id->caps_version = 0;
+#else
+    id->caps_version = capabilities_version();
+#endif
 }
 
 /* (Re-)join the SSDP group on the Ethernet netif's address. Pinning

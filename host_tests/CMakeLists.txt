@@ -17,6 +17,7 @@ set(LCCORE ${CMAKE_CURRENT_SOURCE_DIR}/../components/lccore)
 
 set(LCCORE_SOURCES
     ${LCCORE}/comm_core.c
+    ${LCCORE}/capabilities.c
     ${LCCORE}/identity.c
     ${LCCORE}/fletcher32.c
     ${LCCORE}/lc_log.c
@@ -55,7 +56,7 @@ target_compile_definitions(lccore_recovery PUBLIC
     VERSION_COMMIT="deadbeef"
 )
 
-foreach(t framing ack_info discrete hid fletcher32 identity ssdp log_ring fwupdate)
+foreach(t framing ack_info capabilities discrete hid fletcher32 identity ssdp log_ring fwupdate)
     add_executable(test_${t} tests/test_${t}.c)
     target_link_libraries(test_${t} PRIVATE lccore)
     add_test(NAME ${t} COMMAND test_${t})

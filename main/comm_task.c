@@ -265,6 +265,9 @@ static bool udp_is_valid_ping(const uint8_t *buf, uint16_t len){
         return false;
     }
     uint8_t size = buf[3];
+    if(size > PROTO_MAX_PAYLOAD){
+        return false;
+    }
     if(len < (uint16_t)(PROTO_HEADER_SIZE + size + PROTO_CSUM_SIZE)){
         return false;
     }

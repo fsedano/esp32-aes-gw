@@ -6,9 +6,9 @@
 
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# Recovery keeps the USB-Serial-JTAG console on the USB-C port: no TinyUSB
-# in this personality (hid_usb.c is excluded), so the OTG PHY is never
-# claimed and USB-C stays a bench console/flash port.
+# Recovery keeps USB-Serial-JTAG as a secondary bench console: no TinyUSB is
+# installed in this personality. The primary UART console remains disabled,
+# leaving UART0 exclusively available to RS-485 in both personalities.
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=n
 CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 CONFIG_TINYUSB_HID_COUNT=0

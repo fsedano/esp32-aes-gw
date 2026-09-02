@@ -20,7 +20,9 @@
 #include "nvs_flash.h"
 
 #include "board_id.h"
+#include "capabilities.h"
 #include "comm_task.h"
+#include "discrete_glue.h"
 #include "find_me.h"
 #include "fwup_port.h"
 #include "hid_port.h"
@@ -29,6 +31,7 @@
 #include "lc_log.h"
 #include "lc_port.h"
 #include "net_eth.h"
+#include "rs485_discrete.h"
 #include "ssdp_task.h"
 
 static const char *TAG = "app_main";
@@ -42,6 +45,16 @@ void app_main(void){
 
     lc_port_init();
     lc_log_init();
+
+    /* The Modbus RTU worker owns UART0 and binds the nonblocking backend
+       consumed by the Ethernet wire protocol. */
+#ifndef RECOVERY_BUILD
+    rs485_discrete_init();
+    uint16_t discrete_inputs = rs485_discrete_input_count();
+    uint16_t discrete_outputs = rs485_discrete_output_count();
+    discrete_glue_configure(discrete_inputs, discrete_outputs);
+    capabilities_init(discrete_inputs, discrete_outputs);
+#endif
 
     /* Identity: everything (UID, UUID, serial, hostname) derives from the
        eFuse-based Ethernet MAC, which is also programmed into the W5500. */
@@ -59,8 +72,9 @@ void app_main(void){
 
 #ifndef RECOVERY_BUILD
     /* USB HID joystick: claims the OTG PHY, so the USB-Serial-JTAG console
-       on the USB-C port stops here (logs stay on UART0). Needs identity for
-       the USB serial string, hence after identity_init. */
+       on the USB-C port stops here. Runtime logs use the Ethernet wire
+       protocol and UART0 is reserved for RS-485. Needs identity for the USB
+       serial string, hence after identity_init. */
     hid_port_init();
 #endif
 

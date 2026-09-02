@@ -1,13 +1,15 @@
-# esp32-aes-gw — AES-ESP-DO32-HID linecard firmware
+# esp32-aes-gw — AES-ESP-M31-HID linecard firmware
 
 Firmware for an avionics linecard based on the **Waveshare ESP32-S3-ETH**
 module (W5500 Ethernet over SPI). It speaks the aes-gw2 wire protocol
 (SSDP discovery, TCP :5000 control, UDP :10737 stream) and advertises
-itself as **`AES-ESP-DO32-HID`** (recovery/bootloader mode: **`BL-AES-ESP-DO32-HID`**,
-`fw_type = 1`). The ARINC and discrete pin-driving layers are stubs: all
-commands validate, keep state and ACK exactly like the STM32 sibling
-(`stm32/arinc4i4o`), but no pins are driven and no RX labels are produced
-yet.
+itself as the self-describing **`AES-ESP-M31-HID`** (recovery/bootloader
+mode: **`BL-AES-ESP-M31-HID`**, `fw_type = 1`). Its discrete block is backed
+by a Waveshare 32-channel relay and an Ebyte M31-U on one Modbus RTU bus and
+reports the DI/DO population discovered at boot. The ARINC layer remains a
+protocol stub: commands validate, keep state and ACK like the STM32 sibling
+(`stm32/arinc4i4o`), but no ARINC pins are driven and no RX labels are
+produced yet.
 
 The card's USB-C port is a **USB HID joystick** (8 × 16-bit axes + 32
 buttons, TinyUSB) in the application build: the gateway drives axis/button
@@ -15,22 +17,76 @@ values over the wire protocol (`HID_SETUP 0x33` / `HID_SET 0x34` /
 `HID_STATE 0x35`, wire doc §12) and a Windows PC on the USB port sees a
 standard DirectInput joystick. Consequence: the USB-Serial-JTAG console on
 that port only exists in the **recovery** build — the application claims
-the OTG PHY at boot and logs go to UART0. Firmware updates are OTA over
-ethernet; ROM download mode (hold BOOT) remains the bench fallback.
+the OTG PHY at boot. Runtime logs go to the gateway over Ethernet; UART0
+(TX GPIO43, RX GPIO44) is reserved for the external RS-485 bus. Firmware
+updates are OTA over Ethernet; ROM download mode (hold BOOT) remains the
+bench fallback.
+
+The application and second-stage bootloader consoles are disabled on UART0.
+The ESP32-S3 mask ROM runs before software configuration and may still emit
+boot diagnostics according to the chip's ROM-print strapping/eFuse settings;
+permanent ROM suppression is a board provisioning decision.
 
 Authoritative protocol spec: `aes-gw2/docs/WIRE_PROTOCOL.md`.
+
+## UART / RS-485 discrete I/O
+
+The application owns UART0 on TX GPIO43 / RX GPIO44. Both slaves use 9600
+baud, 8N1:
+
+- Waveshare Modbus RTU Relay 32CH at unit address 1.
+- Ebyte M31-U at unit address 2, selected with its address DIP switch.
+
+The modules share one daisy-chained A/B pair. Configure unique addresses
+before connecting both modules. Terminate only the two physical ends of the
+RS-485 trunk.
+
+The boot probe freezes the discovered population into the capability
+descriptor for that boot. Waveshare relays are mapped first, followed by the
+M31 relays; M31 inputs start at input zero. The expected 32 DO Waveshare plus
+16 DO / 1 DI M31 population exposes `dout.0` through `dout.47` and `din.0`.
+If either module is absent at boot, only channels from the responding module
+are declared. Startup wire logs show each discovery attempt, probed function
+and address, result, final count, and channel mapping.
+
+`main/rs485_discrete.c` runs all blocking UART work in a private task. Relay
+commands wake that task immediately and take priority between periodic polls.
+Each changed relay is written with FC05, confirmed with FC01, and published
+before the worker processes another change. Periodic FC01 readback for both
+modules and M31 FC02 input sampling run one transaction at a time when no
+output change is pending. `DISCRETE_STATE.relay_state` is physical FC01
+readback, not an optimistic echo of a gateway command. Each slave is declared
+offline after three failed output transactions. The discrete link remains up
+while at least one discovered output module responds; M31 input validity is
+reported only after a successful FC02 sample.
+
+The discrete wire data plane uses the scalable range form from wire protocol
+§9: `DISCRETE_SET (0x31)` carries `base_channel`, `bit_count`, and apply/value
+bitmaps; `DISCRETE_STATE (0x32)` carries one range plus relay/input/validity
+bitmaps. This card emits one range starting at channel 0 and covering the
+larger of the detected DI/DO counts. Its local process image supports up to 64
+channels.
+
+Outputs are fail-safe off at boot, on `DISCRETE_SETUP(enable=false)`, and on
+TCP session loss. The worker keeps retrying all-off independently of Ethernet.
+The gateway learns the detected range from `GET_CAPABILITIES`, so unavailable
+channels are not offered for binding. A direct wire command outside that range
+remains unconfirmed.
+`RS485_DE_GPIO` defaults to `-1` for the board's auto-direction transceiver; set
+it to the DE/RE GPIO if a manually-directed transceiver is fitted.
 
 ## Layout
 
 ```
 components/lccore/   protocol core: framing/dispatch (comm_core), identity
                      (from the eFuse MAC), SSDP builders, log ring,
-                     Fletcher32, FW_UPDATE state machine, glue stubs.
+                     Fletcher32, FW_UPDATE state machine, hardware seams.
                      Plain C11, no ESP-IDF includes (lc_port.h seam) — the
                      same sources compile on the host for unit tests.
 main/                ESP-IDF app: W5500 + esp_netif/DHCP, SSDP + UPnP
                      description.xml tasks, TCP/UDP transport, OTA plumbing,
-                     recovery-build esp_ota+mbedtls FW_UPDATE port.
+                     RS-485 Modbus RTU worker, recovery-build esp_ota+mbedtls
+                     FW_UPDATE port.
 host_tests/          plain cmake+ctest unit tests (no ESP-IDF needed).
 tools/fwpack.py      pack an app .bin into the aes-gw2 OTA image container.
 partitions.csv       8 MB: nvs | otadata | phy | factory (recovery, 1 MB)
@@ -52,11 +108,48 @@ idf.py set-target esp32s3
 # Application build (runs from ota_0)
 idf.py build
 
-# Recovery build (factory partition, advertises BL-AES-ESP-DO32-HID, serves FW_UPDATE)
+# Recovery build (factory partition, advertises BL-AES-ESP-M31-HID, serves FW_UPDATE)
 idf.py -B build-recovery -DSDKCONFIG=sdkconfig.recovery \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.recovery" \
        -DRECOVERY_BUILD=1 build
 ```
+
+### Regenerate an application binary from an exact Git tag
+
+The application version is derived from Git when CMake configures the build.
+To produce a binary whose embedded version is exactly the release tag, `HEAD`
+must point at that tag and there must be no staged or unstaged changes to
+tracked files. Finish and commit all release changes before tagging:
+
+```sh
+release_tag=v0.2.2a0
+
+# Create a new release tag. If this local tag already exists but has never
+# been pushed or released, retarget it with: git tag -f "$release_tag" HEAD
+git tag "$release_tag" HEAD
+
+git describe --tags --abbrev=0 --exact-match HEAD  # must print $release_tag
+git status --short --untracked-files=no            # must print nothing
+```
+
+Do not move a tag that has already been pushed or published; create a new
+version tag instead. Force CMake to regenerate the version metadata, then
+build the application:
+
+```sh
+. ~/esp/esp-idf/export.sh
+idf.py reconfigure build
+
+# Verify the metadata embedded in the generated application image.
+python -m esptool image_info --version 2 build/esp32-aes-gw.bin \
+    | grep -E 'Project name|App version'
+```
+
+The check must report `App version: v0.2.2a0` (or the value assigned to
+`release_tag`). The regenerated application image is
+`build/esp32-aes-gw.bin`. Use `reconfigure build`, rather than only `build`,
+after creating or moving a tag so a cached CMake configuration cannot retain
+the previous version.
 
 ## Flash
 
@@ -127,6 +220,33 @@ same format `aes-gw2/fwupdate/pack.go` reads.
 
 Prerequisite (one-time): `pip install cryptography`.
 
+For the usual build/pack/publish flow, use the helper script. It infers the
+release tag from the firmware version, verifies the encrypted container, and
+publishes it to the configured `FwRepo`:
+
+```sh
+# Clean exact-tag release
+tools/release.sh
+
+# Temporary bench release containing tracked working-tree changes. Dirty
+# builds are published as GitHub prereleases; an explicit tag is optional.
+tools/release.sh --allow-dirty
+tools/release.sh --allow-dirty v0.2.3-test.1
+
+# Exercise everything except GitHub publication.
+tools/release.sh --allow-dirty --dry-run
+```
+
+The selected release tag is embedded in both the AES `GET_FW_INFO` response
+and the ESP-IDF application descriptor, so the version shown by aes-gw2
+matches the release. Tags are limited to 24 characters by the wire field;
+long Git-derived dirty versions are shortened automatically. If repeated
+dirty builds share the same commit, pass a fresh explicit tag. Environment
+variables `FW_RELEASE_REPO`, `FW_RELEASE_TARGET`, `FW_RELEASE_BUILD_DIR`, and
+`IDF_EXPORT` override the defaults; release builds use the isolated
+`build-release/` directory and regenerate their configuration from
+`sdkconfig.defaults`. The equivalent manual procedure follows.
+
 ```sh
 # 1. Tag the release commit. Use an exact, clean tag: gen_version.cmake then
 #    stamps a bare "vX.Y.Z" — a dev/dirty suffix (v0.1.1-dev.N.g<sha>) is
@@ -136,10 +256,12 @@ git tag v0.1.2
 git describe --tags        # must print "v0.1.2", not "v0.1.2-1-g…"
 
 # 2. Build the application image (this is what runs from ota_0 and is what
-#    gets shipped — NOT the recovery build).
+#    gets shipped — NOT the recovery build). Reconfigure so a cached build
+#    cannot retain version metadata from before the tag was created.
 source ~/esp/esp-idf/export.sh
-idf.py build
-strings build/esp32-aes-gw.bin | grep -m1 '^v0\.'   # sanity: version string
+idf.py reconfigure build
+python -m esptool image_info --version 2 build/esp32-aes-gw.bin \
+    | grep -E 'Project name|App version'
 
 # 3. Pack the encrypted OTA image.
 python tools/fwpack.py build/esp32-aes-gw.bin esp32-fw-Release-v0.1.2.bin
@@ -159,7 +281,7 @@ PY
 #    gateway's release checker (aes-gw2/fwrelease) ignores anything else.
 gh release create v0.1.2 -R fsedano/sim-lc-esp32-aes-gw \
    --target main --title v0.1.2 \
-   --notes "AES-ESP-DO32-HID firmware v0.1.2" \
+   --notes "AES-ESP-M31-HID firmware v0.1.2" \
    esp32-fw-Release-v0.1.2.bin
 ```
 
@@ -194,18 +316,20 @@ its identity from the MCU's 96-bit UID:
 - **Serial (12 hex chars)** = hex(MAC) — GET_HW_INFO + description.xml.
 - **Hostname** = `A429E-` + first 8 serial chars (DHCP option 12).
 
-## Gateway registration
+## Self-description and gateway discovery
 
-The gateway ignores unknown board_ids: `AES-ESP-DO32-HID` is registered in
-`aes-gw2/linecard/protocol/hid/products.go` (`RegisterProduct`, product
-`AES_ESP_DO32_HID`, `BoardIDs: []string{"AES-ESP-DO32-HID"}`, capabilities: ARINC
-4 in / 4 out plus a discrete `Extra{Inputs:1, Outputs:32}` group plus a HID
-`Extra{Inputs:8, Outputs:32}` group — HID convention: Inputs = axes,
-Outputs = buttons — `FwRepo: fsedano/sim-lc-esp32-aes-gw`, `MinFwVersion:
-v0.2.0`). The pre-HID product `A429_ESP_4D` (board_id `A429-ESP_4D`,
-registered in `.../discrete/products.go`) shares the same FwRepo, so
-already-deployed cards are offered this firmware and become the HID product
-after upgrading. See `aes-gw2/docs/ADDING_LINECARDS.md`.
+The application adds `X-AES-CAPS: 1` to SSDP and serves the version-1 nested
+TLV descriptor through `GET_CAPABILITIES (0x26)`. Its display name is
+`AES ESP32 RS-485 discrete I/O + USB HID`, and its groups are ordered as:
+
+1. `DISCRETE`: the boot-discovered RS-485 DI/DO totals, relay output driver.
+2. `HID_AXIS`: 8 gateway-driven USB joystick axes.
+3. `HID_BUTTON`: 32 gateway-driven USB joystick buttons.
+
+The descriptor is immutable until reboot, as required by
+`aes-gw2/docs/CAPABILITY_DESCRIPTOR.md`, and overrides the gateway registry's
+fixed channel counts. Recovery mode deliberately omits the hint and does not
+serve the descriptor, per the wire contract.
 
 ## Not implemented yet (stubs / deferred)
 
@@ -214,5 +338,3 @@ after upgrading. See `aes-gw2/docs/ADDING_LINECARDS.md`.
   driven.
 - Timetable bulk reads (0x15/0x17): ERROR ACK, same as the STM32 firmware.
 - DEVICE_STATUS counters are all-zero (matches the gateway's fakelc).
-- Discrete inputs: one input is reported present and valid but its state is
-  a constant 0 (no pin is read yet).
