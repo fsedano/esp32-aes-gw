@@ -146,12 +146,17 @@ typedef struct __attribute__((packed)) {
     uint16_t report_ms;
 } proto_discrete_setup_t;
 
-/* DISCRETE_SET (0x31): a 6-byte range header followed by two
-   ceil(bit_count/8)-byte bitmaps (apply, values). Bit i addresses
-   base_channel+i. Idempotent; UDP fire-and-forget or TCP with ACK. */
+/* DISCRETE_SET (0x31): an 8-byte range header followed by one
+   ceil(bit_count/8)-byte values bitmap. Absolute snapshot: every channel
+   base_channel+i takes bit i. The host streams it every 50 ms; seq is the
+   reorder guard (older by signed 8-bit delta -> dropped) and the stream's
+   absence for 1 s drives all relays off. UDP fire-and-forget or TCP with
+   ACK. */
 typedef struct __attribute__((packed)) {
     uint32_t base_channel;
     uint16_t bit_count;
+    uint8_t  seq;
+    uint8_t  flags;
 } proto_discrete_set_header_t;
 
 /* DISCRETE_STATE (0x32): an 8-byte range header followed by three
@@ -164,7 +169,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  seq;
 } proto_discrete_state_header_t;
 
-#define PROTO_DISCRETE_SET_HEADER_SIZE    6u
+#define PROTO_DISCRETE_SET_HEADER_SIZE    8u
 #define PROTO_DISCRETE_STATE_HEADER_SIZE  8u
 #define PROTO_DISCRETE_BITMAP_BYTES(n)    (((uint16_t)(n) + 7u) / 8u)
 

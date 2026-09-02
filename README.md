@@ -61,14 +61,19 @@ while at least one discovered output module responds; M31 input validity is
 reported only after a successful FC02 sample.
 
 The discrete wire data plane uses the scalable range form from wire protocol
-§9: `DISCRETE_SET (0x31)` carries `base_channel`, `bit_count`, and apply/value
-bitmaps; `DISCRETE_STATE (0x32)` carries one range plus relay/input/validity
-bitmaps. This card emits one range starting at channel 0 and covering the
-larger of the detected DI/DO counts. Its local process image supports up to 64
-channels.
+§9: `DISCRETE_SET (0x31)` is an absolute relay snapshot (`base_channel`,
+`bit_count`, `seq`, `flags`, values bitmap) that the gateway streams every
+50 ms; `DISCRETE_STATE (0x32)` carries one range plus relay/input/validity
+bitmaps. A snapshot whose `seq` is older than the last accepted one (signed
+8-bit delta) is dropped; the first snapshot after enable or after a stream
+timeout is always accepted. This card emits one STATE range starting at
+channel 0 and covering the larger of the detected DI/DO counts. Its local
+process image supports up to 64 channels.
 
-Outputs are fail-safe off at boot, on `DISCRETE_SETUP(enable=false)`, and on
-TCP session loss. The worker keeps retrying all-off independently of Ethernet.
+Outputs are fail-safe off at boot, on `DISCRETE_SETUP(enable=false)`, on TCP
+session loss, and when no snapshot arrives for 1 s while enabled (the
+subsystem stays enabled and the next snapshot re-drives them). The worker
+keeps retrying all-off independently of Ethernet.
 The gateway learns the detected range from `GET_CAPABILITIES`, so unavailable
 channels are not offered for binding. A direct wire command outside that range
 remains unconfirmed.

@@ -49,12 +49,14 @@ void discrete_glue_reset(void);
    wire status code. */
 uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms);
 
-/* Apply a range-decoded local relay mask. Writes are silently
-   dropped while disabled or while the backend link is down. */
-void discrete_glue_set(uint64_t apply_mask, uint64_t values);
+/* Apply one snapshot range: every relay in range_mask takes its bit in
+   values. seq older than the last accepted one (signed 8-bit delta) is
+   dropped. Ignored while disabled; while the backend link is down the
+   snapshot still feeds the stream watchdog but drives nothing. */
+void discrete_glue_set(uint64_t range_mask, uint64_t values, uint8_t seq);
 
-/* Periodic service (comm task): emit pending / heartbeat STATE frames via
-   comm_core_send_udp. */
+/* Periodic service (comm task): run the host-stream watchdog and emit
+   pending / heartbeat STATE frames via comm_core_send_udp. */
 void discrete_glue_loop(void);
 
 #ifdef __cplusplus
