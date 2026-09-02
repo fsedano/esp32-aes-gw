@@ -205,7 +205,7 @@ static void handle_get_uid(void){
 }
 
 #ifndef RECOVERY_BUILD
-/* GET_CAPABILITIES (0x0C): stateless offset-based reads of the immutable
+/* GET_CAPABILITIES (0x26): stateless offset-based reads of the immutable
    boot descriptor. The 2-byte total length is repeated in every ACK. */
 static void handle_get_capabilities(uint8_t req_id, const uint8_t *payload,
                                     uint8_t len){

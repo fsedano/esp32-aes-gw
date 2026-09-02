@@ -85,9 +85,24 @@ int main(void){
     const uint8_t *ack = request(COMM_SRC_TCP, 0x20, req, sizeof(req),
                                  &reply_len);
     CHECK(ack != NULL && ack_status(ack) == PROTO_ST_OK);
+    uint8_t reply_cmd = 0;
+    CHECK(cap_frame(&cap_tcp, 0, &reply_cmd, NULL, NULL) != NULL);
+    CHECK_EQ_U32(CMD_SET_HW_INFO, 0x0C);
+    CHECK_EQ_U32(CMD_GET_CAPABILITIES, 0x26);
+    CHECK_EQ_U32(reply_cmd, 0x26);
     CHECK_EQ_U32(reply_len, 5u + 2u + sizeof(expected));
     CHECK_EQ_U32((uint16_t)ack[5] | ((uint16_t)ack[6] << 8), sizeof(expected));
     CHECK_MEM(ack + 7, expected, sizeof(expected));
+
+    /* 0x0C remains SET_HW_INFO and must not expose the descriptor. */
+    cap_reset();
+    uint16_t frame_len = cap_build_req(g_frame, 0x27, CMD_SET_HW_INFO,
+                                       req, sizeof(req));
+    comm_core_input(g_frame, frame_len, COMM_SRC_TCP);
+    uint8_t old_cmd = 0;
+    const uint8_t *old_ack = cap_frame(&cap_tcp, 0, &old_cmd, NULL, NULL);
+    CHECK(old_ack != NULL && old_cmd == CMD_SET_HW_INFO);
+    CHECK_EQ_U32(ack_status(old_ack), PROTO_ST_ERROR);
 
     static const char summary[] =
         "caps: v1 174 bytes; discrete 1 DI/48 DO relay; HID 8 axes/32 buttons";

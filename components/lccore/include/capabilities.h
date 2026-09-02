@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    capabilities.h
-  * @brief   Boot-time-fixed linecard capability descriptor (wire cmd 0x0C).
+  * @brief   Boot-time-fixed linecard capability descriptor (wire cmd 0x26).
   ******************************************************************************
   */
 

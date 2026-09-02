@@ -42,7 +42,7 @@ extern "C" {
 #define CMD_GET_FW_INFO         0x06
 #define CMD_GET_UID             0x09
 #define CMD_ARINC_RECV_LABELS   0x0B        /* dev->host, UDP                 */
-#define CMD_GET_CAPABILITIES    0x0C        /* host->dev, TCP, chunked ACK    */
+#define CMD_SET_HW_INFO         0x0C        /* host->dev, legacy bootloader    */
 #define CMD_GET_HW_INFO         0x0D
 #define CMD_DEVICE_STATUS       0x0E        /* dev->host, TCP periodic        */
 #define CMD_FW_UPDATE           0x0F        /* host->dev, recovery build only */
@@ -57,6 +57,7 @@ extern "C" {
 #define CMD_FIND_ME             0x22
 #define CMD_LOG_MSG             0x24        /* dev->host, UDP, unsolicited    */
 #define CMD_SET_LOG_LEVEL       0x25        /* host->dev, TCP, standard ACK   */
+#define CMD_GET_CAPABILITIES    0x26        /* host->dev, TCP, chunked ACK    */
 #define CMD_DISCRETE_SETUP      0x30        /* host->dev, TCP (ACKed)         */
 #define CMD_DISCRETE_SET        0x31        /* host->dev, UDP (or TCP+ACK)    */
 #define CMD_DISCRETE_STATE      0x32        /* dev->host, UDP                 */

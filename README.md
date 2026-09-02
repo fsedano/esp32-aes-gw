@@ -319,7 +319,7 @@ its identity from the MCU's 96-bit UID:
 ## Self-description and gateway discovery
 
 The application adds `X-AES-CAPS: 1` to SSDP and serves the version-1 nested
-TLV descriptor through `GET_CAPABILITIES (0x0C)`. Its display name is
+TLV descriptor through `GET_CAPABILITIES (0x26)`. Its display name is
 `AES ESP32 RS-485 discrete I/O + USB HID`, and its groups are ordered as:
 
 1. `DISCRETE`: the boot-discovered RS-485 DI/DO totals, relay output driver.
