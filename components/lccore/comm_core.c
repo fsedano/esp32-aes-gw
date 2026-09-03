@@ -646,30 +646,30 @@ static void handle_discrete_set(uint8_t req_id, const uint8_t *payload,
                               | ((uint32_t)payload[3] << 24);
         uint16_t bit_count = (uint16_t)payload[4]
                            | ((uint16_t)payload[5] << 8);
+        uint8_t seq = payload[6];
         uint16_t bitmap_bytes = PROTO_DISCRETE_BITMAP_BYTES(bit_count);
         uint16_t expected = (uint16_t)(PROTO_DISCRETE_SET_HEADER_SIZE
-                                    + 2u * bitmap_bytes);
+                                    + bitmap_bytes);
         uint64_t range_end = (uint64_t)base_channel + bit_count;
         if(bit_count == 0 || expected != len || range_end > UINT32_MAX + 1ull){
             status = PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT;
         }else{
-            const uint8_t *apply = payload + PROTO_DISCRETE_SET_HEADER_SIZE;
-            const uint8_t *values = apply + bitmap_bytes;
-            uint64_t local_apply = 0;
+            const uint8_t *values = payload + PROTO_DISCRETE_SET_HEADER_SIZE;
+            uint64_t local_mask = 0;
             uint64_t local_values = 0;
             for(uint16_t i = 0; i < bit_count; i++){
                 uint32_t channel = base_channel + i;
-                if(channel >= 64u || (apply[i / 8u] & (1u << (i % 8u))) == 0u){
+                if(channel >= 64u){
                     continue;
                 }
                 uint64_t mask = UINT64_C(1) << channel;
-                local_apply |= mask;
+                local_mask |= mask;
                 if((values[i / 8u] & (1u << (i % 8u))) != 0u){
                     local_values |= mask;
                 }
             }
-            if(local_apply != 0u){
-                discrete_glue_set(local_apply, local_values);
+            if(local_mask != 0u){
+                discrete_glue_set(local_mask, local_values, seq);
             }
         }
     }

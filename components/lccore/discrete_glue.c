@@ -17,6 +17,8 @@
 
 #define DISCRETE_DEFAULT_REPORT_MS  500u
 #define DISCRETE_DISABLE_TIMEOUT_MS 2000u
+/* Host streams SET every 50 ms; silence this long drives relays off. */
+#define DISCRETE_STREAM_TIMEOUT_MS  1000u
 #define DISCRETE_LOCAL_MAX_CHANNELS 64u
 
 typedef struct {
@@ -25,6 +27,9 @@ typedef struct {
     uint32_t disable_started_ms;
     uint16_t report_ms;
     uint64_t desired;       /* host-commanded relay bits                  */
+    bool     set_seen;      /* a SET was accepted since enable/timeout    */
+    uint8_t  last_set_seq;
+    uint32_t last_set_ms;
     discrete_backend_state_t hw;
     bool     hw_seen;
     uint8_t  seq;           /* per-send counter, wraps                    */
@@ -134,6 +139,7 @@ void discrete_glue_reset(void){
     g_disc.enabled     = false;
     g_disc.disabling   = false;
     g_disc.desired     = 0;
+    g_disc.set_seen    = false;
     g_disc.report_ms   = DISCRETE_DEFAULT_REPORT_MS;
     g_disc.state_pending = false;
     if(was_enabled || had_bits){
@@ -145,6 +151,7 @@ uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms){
     (void)flags;                        /* reserved, always 0 today */
     if(enable){
         g_disc.desired   = 0;
+        g_disc.set_seen  = false;
         g_disc.enabled   = true;
         g_disc.disabling = false;
         g_disc.report_ms = (report_ms != 0) ? report_ms : DISCRETE_DEFAULT_REPORT_MS;
@@ -174,41 +181,66 @@ uint32_t discrete_glue_setup(uint8_t enable, uint8_t flags, uint16_t report_ms){
     return PROTO_ST_OK;
 }
 
-void discrete_glue_set(uint64_t apply_mask, uint64_t values){
+static uint64_t valid_outputs(void){
+    if(g_output_count >= 64u){
+        return UINT64_MAX;
+    }
+    return g_output_count == 0u ? 0u : (UINT64_C(1) << g_output_count) - 1u;
+}
+
+void discrete_glue_set(uint64_t range_mask, uint64_t values, uint8_t seq){
     if(!g_disc.enabled || g_disc.disabling){
         return;
     }
-    uint64_t valid_outputs = UINT64_MAX;
-    if(g_output_count < 64u){
-        valid_outputs = g_output_count == 0u
-                      ? 0u : (UINT64_C(1) << g_output_count) - 1u;
-    }
-    apply_mask &= valid_outputs;
-    values &= valid_outputs;
-    if(apply_mask == 0u){
+    range_mask &= valid_outputs();
+    values &= range_mask;
+    if(range_mask == 0u){
         return;
     }
+    if(g_disc.set_seen && (int8_t)(seq - g_disc.last_set_seq) < 0){
+        return;                             /* reordered stale snapshot */
+    }
+    g_disc.set_seen     = true;
+    g_disc.last_set_seq = seq;
+    g_disc.last_set_ms  = lc_port_tick_ms();
     refresh_hardware();
     if(!g_disc.hw.link){
-        /* While link-down writes are silently dropped — wire doc §9.3. The
-           gateway keeps them pending and retries after STATE reports link. */
-        return;
+        return;                             /* wire doc §9.3: dropped */
     }
-    uint64_t next = (g_disc.desired & ~apply_mask) | (values & apply_mask);
+    uint64_t next = (g_disc.desired & ~range_mask) | values;
     if(next != g_disc.desired){
         LOG_DBG("discrete: desired relays 0x%016llx",
                 (unsigned long long)next);
     }
     g_disc.desired = next;
     if(g_backend != NULL && g_backend->set_outputs != NULL){
-        g_backend->set_outputs(apply_mask, values);
+        g_backend->set_outputs(range_mask, values);
     }
+}
+
+/* Wire doc §9.5 trigger 4: the host stream stopped while enabled. */
+static void check_stream_timeout(void){
+    if(!g_disc.set_seen || g_disc.disabling){
+        return;
+    }
+    uint32_t now = lc_port_tick_ms();
+    if((uint32_t)(now - g_disc.last_set_ms) < DISCRETE_STREAM_TIMEOUT_MS){
+        return;
+    }
+    g_disc.set_seen = false;
+    g_disc.desired  = 0;
+    if(g_backend != NULL && g_backend->set_outputs != NULL){
+        g_backend->set_outputs(valid_outputs(), 0);
+    }
+    g_disc.state_pending = true;
+    LOG_INF("discrete: host stream timeout, requesting all relays off");
 }
 
 void discrete_glue_loop(void){
     if(!g_disc.enabled){
         return;
     }
+    check_stream_timeout();
     refresh_hardware();
     if(g_disc.disabling){
         uint32_t now = lc_port_tick_ms();

@@ -108,21 +108,21 @@ static const state_view_t *next_state(void){
     return &state;
 }
 
-static uint8_t build_set(uint8_t out[22], uint32_t base, uint16_t count,
-                         uint64_t apply, uint64_t values){
+static uint8_t build_set(uint8_t out[16], uint32_t base, uint16_t count,
+                         uint8_t seq, uint64_t values){
     uint16_t bytes = PROTO_DISCRETE_BITMAP_BYTES(count);
-    memset(out, 0, 22);
+    memset(out, 0, 16);
     out[0] = (uint8_t)base;
     out[1] = (uint8_t)(base >> 8);
     out[2] = (uint8_t)(base >> 16);
     out[3] = (uint8_t)(base >> 24);
     out[4] = (uint8_t)count;
     out[5] = (uint8_t)(count >> 8);
+    out[6] = seq;
     for(uint16_t i = 0; i < bytes && i < 8u; i++){
-        out[6 + i] = (uint8_t)(apply >> (8u * i));
-        out[6 + bytes + i] = (uint8_t)(values >> (8u * i));
+        out[8 + i] = (uint8_t)(values >> (8u * i));
     }
-    return (uint8_t)(PROTO_DISCRETE_SET_HEADER_SIZE + 2u * bytes);
+    return (uint8_t)(PROTO_DISCRETE_SET_HEADER_SIZE + bytes);
 }
 
 int main(void){
@@ -185,11 +185,11 @@ int main(void){
 
     /* A SET updates backend intent but must not optimistically report the
        relay. Only a later physical snapshot confirms it. */
-    uint8_t set[22];
-    uint8_t set_len = build_set(set, 0, 16, 0x0000000F, 0x00000005);
+    uint8_t set[16];
+    uint8_t set_len = build_set(set, 0, 16, 1, 0x00000005);
     static const uint8_t set_golden[] = {
-        0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
-        0x0F, 0x00, 0x05, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00,
+        0x05, 0x00,
     };
     CHECK_EQ_U32(set_len, sizeof(set_golden));
     CHECK_MEM(set, set_golden, sizeof(set_golden));
@@ -206,9 +206,10 @@ int main(void){
     CHECK_EQ_U32(st->relay_state, 0x5);
     CHECK((uint8_t)(st->seq - seq0) == 1);      /* seq increments per send */
 
-    /* DISCRETE_SET over UDP: fire-and-forget (no ACK), still applied.
-       Masked merge: only bit 1 touched. */
-    set_len = build_set(set, 1, 3, 0x7, 0x3);
+    /* DISCRETE_SET over UDP: fire-and-forget (no ACK), still applied. The
+       range is absolute: channels 1..3 take the bitmap, channel 0 is
+       outside the range and keeps its level. */
+    set_len = build_set(set, 1, 3, 2, 0x3);
     pl = req(COMM_SRC_UDP, 5, CMD_DISCRETE_SET, set, set_len);
     CHECK(pl == NULL);
     CHECK_EQ_U32(g_fake.desired, 0x7);
@@ -216,12 +217,18 @@ int main(void){
     st = next_state();
     CHECK(st != NULL);
     CHECK_EQ_U32(st->relay_state, 0x7);
+    set_len = build_set(set, 0, 4, 3, 0x8);
+    (void)req(COMM_SRC_UDP, 6, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.desired, 0x8);
+    g_fake.state.relay_state = 0x8;
+    st = next_state();
+    CHECK(st != NULL);
 
     /* A range above channel 31 maps into the upper half of the local image. */
-    set_len = build_set(set, 32, 16, 0x8001, 0x8001);
+    set_len = build_set(set, 32, 16, 4, 0x8001);
     pl = req(COMM_SRC_UDP, 50, CMD_DISCRETE_SET, set, set_len);
     CHECK(pl == NULL);
-    uint64_t upper_relays = (UINT64_C(0x8001) << 32) | 0x7u;
+    uint64_t upper_relays = (UINT64_C(0x8001) << 32) | 0x8u;
     CHECK_EQ_U32(g_fake.desired, upper_relays);
     g_fake.state.relay_state = upper_relays;
     st = next_state();
@@ -230,16 +237,16 @@ int main(void){
 
     /* Malformed ranges return the payload error on TCP; UDP remains silent.
        A valid range outside the declared 48 outputs has no backend effect. */
-    uint8_t malformed[8] = {0};
-    pl = req(COMM_SRC_TCP, 51, CMD_DISCRETE_SET, malformed, 5);
+    uint8_t malformed[9] = {0};
+    pl = req(COMM_SRC_TCP, 51, CMD_DISCRETE_SET, malformed, 7);
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT);
-    pl = req(COMM_SRC_TCP, 52, CMD_DISCRETE_SET, malformed, 6); /* count=0 */
+    pl = req(COMM_SRC_TCP, 52, CMD_DISCRETE_SET, malformed, 8); /* count=0 */
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT);
-    malformed[4] = 9; /* wants two apply + two value bytes, only two follow */
+    malformed[4] = 9; /* wants two value bytes, only one follows */
     pl = req(COMM_SRC_TCP, 53, CMD_DISCRETE_SET, malformed, sizeof(malformed));
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_COMM_ERR_PAYLOAD_TOO_SHORT);
     unsigned calls_before_oor = g_fake.set_calls;
-    set_len = build_set(set, 48, 1, 1, 1);
+    set_len = build_set(set, 48, 1, 5, 1);
     pl = req(COMM_SRC_TCP, 54, CMD_DISCRETE_SET, set, set_len);
     CHECK(pl != NULL && ack_status(pl) == PROTO_ST_OK);
     CHECK_EQ_U32(g_fake.set_calls, calls_before_oor);
@@ -264,7 +271,7 @@ int main(void){
     CHECK(!g_fake.enabled);
     CHECK_EQ_U32(g_fake.desired, 0);
     unsigned calls_at_disable = g_fake.set_calls;
-    set_len = build_set(set, 0, 1, 0x1, 0x1);
+    set_len = build_set(set, 0, 1, 6, 0x1);
     (void)req(COMM_SRC_UDP, 60, CMD_DISCRETE_SET,
               set, set_len);
     CHECK_EQ_U32(g_fake.set_calls, calls_at_disable);
@@ -277,7 +284,7 @@ int main(void){
     CHECK_EQ_U32(cap_udp.frames, 0);
 
     /* Writes while disabled are silently dropped. */
-    set_len = build_set(set, 0, 32, UINT32_MAX, UINT32_MAX);
+    set_len = build_set(set, 0, 32, 7, UINT32_MAX);
     (void)req(COMM_SRC_UDP, 7, CMD_DISCRETE_SET, set, set_len);
     su.enable = 1;
     pl = req(COMM_SRC_TCP, 8, CMD_DISCRETE_SETUP, (const uint8_t *)&su, sizeof(su));
@@ -295,21 +302,62 @@ int main(void){
     CHECK_EQ_U32(st->link, 0);
     CHECK_EQ_U32(st->input_valid, 0);
     unsigned calls_before = g_fake.set_calls;
-    set_len = build_set(set, 0, 1, 0x1, 0x1);
+    set_len = build_set(set, 0, 1, 10, 0x1);
     (void)req(COMM_SRC_UDP, 9, CMD_DISCRETE_SET, set, set_len);
     CHECK_EQ_U32(g_fake.set_calls, calls_before);
 
-    /* On recovery the gateway retry is accepted and physical readback is
-       still required before STATE confirms it. */
+    /* On recovery the next streamed snapshot is accepted and physical
+       readback is still required before STATE confirms it. */
     g_fake.state.link = true;
     g_fake.state.input_valid = 1;
     st = next_state();
     CHECK(st != NULL && st->link == 1);
+    set_len = build_set(set, 0, 1, 11, 0x1);
     (void)req(COMM_SRC_UDP, 10, CMD_DISCRETE_SET, set, set_len);
     CHECK_EQ_U32(g_fake.set_calls, calls_before + 1);
     g_fake.state.relay_state = 1;
     st = next_state();
     CHECK(st != NULL && st->relay_state == 1);
+
+    /* Reorder guard: a snapshot older by signed 8-bit delta is dropped; a
+       newer one (including across the wrap) applies. */
+    set_len = build_set(set, 0, 1, 5, 0x0);
+    (void)req(COMM_SRC_UDP, 11, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.set_calls, calls_before + 1);
+    CHECK_EQ_U32(g_fake.desired, 1);
+    set_len = build_set(set, 0, 1, 130, 0x0);
+    (void)req(COMM_SRC_UDP, 12, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.desired, 0);
+    set_len = build_set(set, 0, 1, 250, 0x1);
+    (void)req(COMM_SRC_UDP, 13, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.desired, 1);
+    set_len = build_set(set, 0, 1, 3, 0x0);
+    (void)req(COMM_SRC_UDP, 14, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.desired, 0);
+    set_len = build_set(set, 0, 1, 4, 0x1);
+    (void)req(COMM_SRC_UDP, 15, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.desired, 1);
+
+    /* Stream watchdog (§9.5 trigger 4): 1 s without SET drives relays off
+       and re-arms; the next snapshot is accepted whatever its seq. */
+    unsigned calls_at_stream = g_fake.set_calls;
+    host_port_set_tick(lc_port_tick_ms() + 900);
+    cap_reset();
+    discrete_glue_loop();
+    CHECK_EQ_U32(g_fake.set_calls, calls_at_stream);
+    CHECK_EQ_U32(g_fake.desired, 1);
+    host_port_set_tick(lc_port_tick_ms() + 200);
+    cap_reset();
+    discrete_glue_loop();
+    CHECK_EQ_U32(g_fake.set_calls, calls_at_stream + 1);
+    CHECK_EQ_U32(g_fake.desired, 0);
+    CHECK(g_fake.enabled);                      /* subsystem stays enabled */
+    g_fake.state.relay_state = 0;
+    st = next_state();
+    CHECK(st != NULL && st->relay_state == 0);
+    set_len = build_set(set, 0, 1, 0, 0x1);
+    (void)req(COMM_SRC_UDP, 16, CMD_DISCRETE_SET, set, set_len);
+    CHECK_EQ_U32(g_fake.desired, 1);
 
     /* TCP session loss: subsystem disabled, relays off (§9.5 trigger 3). */
     comm_core_session(false);
